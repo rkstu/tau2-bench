@@ -1,238 +1,171 @@
 # tau2-TRACE: Trajectory-Aware Comprehensive Evaluation
 
-> **Deterministic, zero-cost trajectory observability for tau2-bench.**
+> Deterministic, zero-cost process-level metrics for tau2-bench — answering not just *"did the agent succeed?"* but *"how did it get there?"*
 
-## The Problem: The "High-Score Illusion"
+## The Gap
 
-tau2-bench evaluates agents with a binary question: *does the final database state match ground truth?*
+tau2-bench's `pass^k` metric checks whether the final database state matches ground truth. This is rigorous but leaves critical questions unanswered:
 
-This is mathematically rigorous (`pass^k`) but hides critical enterprise failures:
-
-- **Inefficient Success**: An agent that loops 28 times to solve a 2-step task gets the same `reward=1.0` as an efficient agent.
-- **Process Violations**: An agent that skips post-mutation verification but lands on the right state goes undetected.
-- **Diagnostic Black Box**: When an agent fails, `pass^k` says "0" — it cannot explain *where* in the reasoning chain the break occurred.
-
-### Real-World Proof
-
-We ran tau2-TRACE against real `gpt-4.1-mini` simulations on the Sierra tau2-bench orchestrator. The results demonstrate that **binary rewards are deceptive**:
-
-| Metric | Telecom Agent (**PASS**) | Retail Agent (**FAIL**) | What This Means |
-|---|---|---|---|
-| **tau2-bench reward** | 1.0 | 0.0 | *Standard result — no further insight* |
-| **Turns vs. Expected** | **14.0x** | **2.6x** | The passing agent was wildly inefficient |
-| **Agent Cost** | **$0.018** | **$0.006** | The passing agent cost 3x more |
-| **Redundant Calls** | 1 | 0 | The failing agent had zero process errors |
-| **Guidance Precision** | 87.5% | N/A | The passing agent at least guided well |
-
-**The "passing" telecom agent is an enterprise liability. The "failing" retail agent had superior process quality.** In Sierra's outcomes-based pricing model, the passing agent costs 3x more per resolution. tau2-TRACE makes this visible. `pass^k` alone cannot.
-
----
-
-## The Solution: Process-Level Observability
-
-tau2-TRACE analyzes the full interaction trajectory (`SimulationRun.messages`) to answer not just *"did the agent succeed?"* but *"how did it get there?"*
-
-### Design Principles
-
-- **Zero LLM Judge Costs**: All metrics are deterministic and rule-based — O(n) computation.
-- **Zero Core Changes**: Lives entirely in `src/experiments/tau2_trace/`. The existing evaluation pipeline is untouched.
-- **Domain-Aware**: Uses the existing DOT workflow files for Telecom DAG adherence; Read-After-Write checks for Retail/Airline.
-- **Orthogonal**: Runs *alongside* the standard `pass^k` pipeline, not inside it. No risk to existing leaderboards.
-
-### Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                     Existing tau2-bench pipeline                      │
-│  tau2 run → Orchestrator → evaluate_simulation() → pass^k reward     │
-│  Output: SimulationRun (messages, reward, cost)                       │
-└──────────────────────────────┬───────────────────────────────────────┘
-                               │ SimulationRun.messages
-                               ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                    tau2-TRACE (this experiment)                        │
-│  Zero core changes. Zero LLM costs. Fully deterministic.              │
-│                                                                        │
-│  trajectory_analyzer.py  → Efficiency (redundancy, loops, recovery)   │
-│  tool_order_evaluator.py → Adherence (DAG ordering, read-after-write) │
-│  interaction_quality.py  → Quality (action density, guidance, cost)    │
-│  domain_router.py        → Domain-aware dispatch + aggregation         │
-│                                                                        │
-│  Output: Augmented DataFrame (standard metrics + trace_* columns)     │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## What tau2-bench Evaluates Today vs. What tau2-TRACE Adds
-
-| Dimension | tau2-bench (Before) | tau2-TRACE (After) |
+| Question | tau2-bench Today | tau2-TRACE Adds |
 |---|---|---|
-| **Outcome** | Final DB state match (`pass^k`) | Preserved — tau2-TRACE does not replace this |
-| **Tool Usage** | Were expected tools called? (presence only, `ActionEvaluator`) | Were they called in the **right order**? Were writes **verified**? Were calls **redundant**? |
-| **Communication** | Did agent mention required info? (substring match, has `TODO: improve!`) | How **precise** was guidance? (telecom term usage). How **verbose** was the agent? (token-to-action ratio) |
-| **Efficiency** | Not measured | Turns vs expected actions, action density, loop detection, error recovery rate |
-| **Cost Insight** | `agent_cost` field exists but isn't evaluated | Cost contextualized against efficiency — same pass, different price |
-| **Failure Diagnosis** | "reward=0" — no further detail | Was the process correct? Where did it break? Is the agent close to production-ready? |
+| Did the agent succeed? | Final DB state match (`pass^k`) | Preserved — we don't replace this |
+| Were tools called correctly? | Presence check (`ActionEvaluator`) | **Ordering** check against workflow DAGs + **read-after-write** verification |
+| Was communication clear? | Substring match (`CommunicateEvaluator`) | **Guidance precision** (telecom-specific terminology) + **token-to-action** verbosity ratio |
+| Was the agent efficient? | Not measured | **Turns vs. expected**, action density, loop detection, redundancy detection |
+| Why did the agent fail? | `reward=0` — no detail | Process diagnosis: was the failure in reasoning, tool selection, or a single parameter? |
 
----
+## Proof: Real Simulations, Counterintuitive Results
 
-## Metrics Reference
+We ran tau2-TRACE against real `gpt-4.1-mini` trajectories from the Sierra orchestrator:
 
-### Trajectory Efficiency
+| | Telecom Agent | Retail Agent |
+|---|---|---|
+| **tau2-bench says** | **PASS** (reward=1.0) | **FAIL** (reward=0.0) |
+| Turns for the task | 28 (expected: 2 actions) | 13 (expected: 5 actions) |
+| Turn overhead | **14.0x** | **2.6x** |
+| Cost | **$0.018** | **$0.006** |
+| Redundant tool calls | 1 | 0 |
+| Process errors | 0 | 0 |
 
-| Metric | Definition |
-|---|---|
-| `trace_redundant_tool_calls` | Consecutive calls with identical name + arguments (no state change between) |
-| `trace_loop_count` | Repeating tool call patterns (sliding window, length 3) |
-| `trace_error_count` | Tool calls that returned errors |
-| `trace_error_recovery_rate` | Fraction of errors followed by successful retry within 3 steps |
-| `trace_agent_tool_calls` | Total agent-initiated tool calls |
-| `trace_user_tool_calls` | Total user-initiated tool calls (telecom dual-control) |
+The passing agent cost 3x more and was 5x less efficient. The failing agent had a flawless process — it broke at one tool call parameter. **`pass^k` treats these as 1.0 and 0.0. tau2-TRACE shows the full picture.**
 
-### Policy Adherence
+See [EXAMPLE_OUTPUT.md](EXAMPLE_OUTPUT.md) for the detailed case studies with developer-actionable takeaways.
 
-| Metric | Definition |
-|---|---|
-| `trace_policy_adherence` | Telecom: fraction of tool transitions following the DOT workflow DAG. Retail/Airline: read-after-write score |
-| `trace_matched_workflow` | Best-matching telecom workflow path (`path1_no_service`, `path2_mobile_data`, `path3_mms`) |
-| `trace_read_after_write_score` | Fraction of write operations (cancel, exchange, etc.) verified by a subsequent read |
-| `trace_policy_breach_count` | Number of out-of-order tool transitions against the DAG |
+## How It Works
 
-### Interaction Quality
+tau2-TRACE reads `SimulationRun.messages` (the existing trajectory data) and computes metrics across three dimensions:
 
-| Metric | Definition |
-|---|---|
-| `trace_action_density` | `total_tool_calls / total_turns` — higher = more efficient |
-| `trace_token_to_action_ratio` | Agent characters per tool call — lower = less verbose |
-| `trace_turns_vs_expected` | `actual_turns / expected_actions` — closer to 1.0 = better |
-| `trace_repeated_info_requests` | Agent asks for data already present in prior tool results |
-| `trace_guidance_precision` | (Telecom only) Fraction of agent messages containing specific device/network terms |
+```
+                    SimulationRun.messages
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+      ┌─────────────┐ ┌───────────┐ ┌────────────┐
+      │ Efficiency   │ │ Adherence │ │ Quality    │
+      │              │ │           │ │            │
+      │ Redundancy   │ │ DAG order │ │ Action     │
+      │ Loops        │ │ Read-     │ │ density    │
+      │ Error        │ │ after-    │ │ Guidance   │
+      │ recovery     │ │ write     │ │ precision  │
+      └──────┬───────┘ └─────┬─────┘ └──────┬─────┘
+             └───────────────┼───────────────┘
+                             ▼
+                   CompositeScorecard
+                 (merged into DataFrame)
+```
 
-### Domain-Aware Routing
+**What this looks like in practice** — same simulation, before and after:
 
-| Domain | DAG Ordering | Read-After-Write | Guidance Precision |
-|---|---|---|---|
-| **Telecom** | 3 DOT workflow files (no_service, mobile_data, mms) | Yes | Yes (30 telecom-specific terms) |
-| **Retail** | N/A | Yes (exchange, cancel, return, modify) | N/A |
-| **Airline** | N/A | Yes (book, cancel, update, certificate) | N/A |
+```
+# tau2-bench alone:
+task_id=telecom_042  reward=1.0  agent_cost=$0.018
 
----
+# tau2-bench + tau2-TRACE:
+task_id=telecom_042  reward=1.0  agent_cost=$0.018
+  trace_turns_vs_expected=14.0x  trace_redundant_tool_calls=1
+  trace_matched_workflow=path2_mobile_data  trace_guidance_precision=0.875
+  trace_error_recovery_rate=1.0  trace_read_after_write_score=1.0
+```
+
+Same data in, richer data out. Every `trace_*` column is computed deterministically from the existing `SimulationRun.messages` — no extra API calls, no changes to the simulation itself.
+
+**Design constraints:**
+- **Zero LLM calls** — all metrics are deterministic, O(n)
+- **Zero core changes** — lives entirely in `src/experiments/tau2_trace/`
+- **Domain-aware** — telecom gets DAG workflow checks (using the existing DOT files); retail/airline get read-after-write verification
+
+Also includes an **adversarial user simulator wrapper** (`AdversarialSimulatorWrapper`) that injects seeded interruptions and self-corrections via the Proxy Pattern — no core code touched.
 
 ## Quick Start
 
-### Post-hoc Analysis (Recommended — No Simulation Needed)
-
-Analyze any existing tau2-bench results file:
-
 ```bash
+# Analyze an existing simulation (no API key needed)
 python -m experiments.tau2_trace.run_experiment analyze \
-    --results-file data/simulations/my_run.json \
-    --output src/experiments/tau2_trace/results/tau2_trace_augmented.csv
-```
+    --results-file data/simulations/my_run.json
 
-Produces a CSV with all standard tau2-bench columns *plus* `trace_*` columns — ready for pandas/Jupyter analysis.
-
-### Generate + Analyze (Requires API Key)
-
-```bash
-# Run a simulation
+# Or generate + analyze (requires OPENAI_API_KEY)
 tau2 run --domain telecom --num-tasks 1 --num-trials 1 \
-    --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini \
-    --save-to my_telecom_run
-
-# Analyze with tau2-TRACE
+    --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini --save-to my_run
 python -m experiments.tau2_trace.run_experiment analyze \
-    --results-file data/simulations/my_telecom_run.json
+    --results-file data/simulations/my_run.json
 ```
 
-### Adversarial User Simulator (Optional Stress-Test)
-
-```python
-from tau2.user.user_simulator import UserSimulator
-from experiments.tau2_trace.adversarial_wrapper import AdversarialSimulatorWrapper
-
-base_sim = UserSimulator(tools=tools, instructions=instructions, llm="gpt-4.1")
-chaos_sim = AdversarialSimulatorWrapper(base_sim, perturbation_rate=0.2, seed=42)
-# Pass chaos_sim to the Orchestrator — same interface, chaotic behavior
-```
-
-Perturbation types (seeded for reproducibility):
-- **Interruption**: Off-topic user question mid-troubleshooting
-- **Self-correction**: User gives wrong info, then corrects next turn
-
----
+Output: CSV with all standard tau2-bench columns plus `trace_*` columns, ready for pandas analysis.
 
 ## Validation
 
-### Real-World Data (3 domains, real LLM trajectories)
-
-| Domain | Task | Model | Reward | tau2-TRACE Finding |
-|---|---|---|---|---|
-| **Telecom** | Mobile data (airplane+roaming) | gpt-4.1-mini | 1.0 (PASS) | 14.0x turn overhead, $0.018 cost, 87.5% guidance precision |
-| **Retail** | Order item exchange | gpt-4.1-mini | 0.0 (FAIL) | Zero process errors — failure at final tool call only |
-| **Mock** | Task creation | gpt-4.1-mini | 1.0 (PASS) | Clean baseline — 5 turns, 1 tool call |
-
-### Test Suite: 50/50 Passed
-
-```
-======================== 50 passed, 1 warning in 1.32s =========================
-```
-
-| Test File | Tests | Coverage |
-|---|---|---|
-| `test_trajectory_analyzer.py` | 11 | Parsing, redundancy, loops, error recovery |
-| `test_tool_order_evaluator.py` | 13 | DAG ordering, workflow matching, read-after-write |
-| `test_interaction_quality.py` | 11 | Action density, token ratio, guidance precision |
-| `test_domain_router.py` | 5 | Cross-domain routing, scorecard serialization |
-| `test_adversarial_wrapper.py` | 5 | Proxy pattern, seeded reproducibility |
-| `test_integration.py` | 5 | End-to-end with file I/O, DataFrame merge |
-
-See [EXAMPLE_OUTPUT.md](EXAMPLE_OUTPUT.md) for the full case studies with detailed metric breakdowns.
-
----
+Tested against real Sierra orchestrator output across 3 domains (mock, telecom, retail). 50/50 tests passing — unit tests, integration tests with file I/O, and end-to-end DataFrame merge validation. Pre-computed result CSVs included in `results/`.
 
 ## File Structure
 
 ```
 src/experiments/tau2_trace/
-├── README.md                        # This file
-├── EXAMPLE_OUTPUT.md                # Real-world case studies and validation
-├── __init__.py
-├── models.py                        # Dataclasses: TrajectoryMetrics, OrderingMetrics, etc.
-├── trajectory_analyzer.py           # Parse messages → tool call records → efficiency metrics
-├── tool_order_evaluator.py          # DAG-based ordering (telecom) + read-after-write (all)
-├── interaction_quality.py           # Action density, token ratio, guidance precision
-├── domain_router.py                 # Domain-aware dispatch + CompositeScorecard
-├── adversarial_wrapper.py           # UserSimulator proxy for chaos testing
-├── run_experiment.py                # CLI entry point
-├── results/                         # Real-world analysis outputs (CSV)
-│   ├── telecom_trace.csv
-│   ├── retail_trace.csv
-│   └── mock_trace.csv
-└── tests/
-    ├── test_trajectory_analyzer.py
-    ├── test_tool_order_evaluator.py
-    ├── test_interaction_quality.py
-    ├── test_domain_router.py
-    ├── test_adversarial_wrapper.py
-    └── test_integration.py
+├── models.py                  # TrajectoryMetrics, OrderingMetrics, InteractionMetrics, CompositeScorecard
+├── trajectory_analyzer.py     # Parse messages → efficiency metrics (redundancy, loops, recovery)
+├── tool_order_evaluator.py    # DAG workflow ordering (telecom) + read-after-write (all domains)
+├── interaction_quality.py     # Action density, token ratio, guidance precision
+├── domain_router.py           # Domain-aware dispatch → CompositeScorecard
+├── adversarial_wrapper.py     # UserSimulator proxy (interruptions, self-corrections)
+├── run_experiment.py          # CLI: analyze existing Results JSON → augmented CSV
+├── results/                   # Pre-computed CSVs from real-world validation
+├── tests/                     # 50 tests (6 files)
+├── README.md
+└── EXAMPLE_OUTPUT.md          # Detailed case studies
 ```
 
 ---
 
-## Limitations & Future Work
+<details>
+<summary><strong>Metrics Reference</strong> (click to expand)</summary>
 
-- **Telecom-only DAG evaluation**: Retail and airline use simpler read-after-write checks since no DOT workflow files exist for those domains. Authoring DAGs for retail/airline policies would extend full workflow coverage.
-- **No LLM-based semantic checks**: By design, all metrics are deterministic. The existing `NLAssertionsEvaluator` pattern could be used to add semantic checks (e.g., hallucination detection) as a future Layer 2.
-- **Adversarial wrapper is experimental**: The perturbation types are illustrative. Production deployment would need calibration against real user behavior distributions.
+### Trajectory Efficiency
 
-## Related Work
+| Metric | Definition |
+|---|---|
+| `trace_redundant_tool_calls` | Consecutive calls with identical name + arguments |
+| `trace_loop_count` | Repeating tool call patterns (window=3) |
+| `trace_error_count` | Tool calls that returned errors |
+| `trace_error_recovery_rate` | Errors followed by successful retry within 3 steps |
 
-This experiment draws on concepts from:
-- **TRAJECT-Bench**: Fine-grained tool usage diagnostics via trajectory alignment
-- **TRACE**: Dynamic evidence banks for multi-dimensional process evaluation
-- **Agent GPA**: Temporal workflow phase evaluation (Goal, Plan, Action)
-- **SWE-eval**: Info-gain metrics penalizing redundant tool executions
+### Policy Adherence
 
-Adapted to tau2-bench's Dec-POMDP dual-control environment with a strict deterministic-first philosophy.
+| Metric | Definition |
+|---|---|
+| `trace_policy_adherence` | Telecom: tool transitions following DOT workflow DAG. Retail/Airline: read-after-write score |
+| `trace_matched_workflow` | Best-matching telecom path (no_service / mobile_data / mms) |
+| `trace_read_after_write_score` | Write operations verified by subsequent read |
+
+### Interaction Quality
+
+| Metric | Definition |
+|---|---|
+| `trace_action_density` | `tool_calls / turns` — higher = more efficient |
+| `trace_token_to_action_ratio` | Agent characters per tool call — lower = less verbose |
+| `trace_turns_vs_expected` | `actual_turns / expected_actions` — closer to 1.0 = better |
+| `trace_guidance_precision` | (Telecom) Fraction of messages with specific device/network terms |
+
+### Domain Routing
+
+| Domain | DAG | Read-After-Write | Guidance |
+|---|---|---|---|
+| Telecom | 3 DOT files | Yes | Yes |
+| Retail | — | Yes | — |
+| Airline | — | Yes | — |
+
+</details>
+
+<details>
+<summary><strong>Limitations & Future Work</strong> (click to expand)</summary>
+
+- **Telecom-only DAG**: Retail/airline use simpler read-after-write checks. Authoring DAGs for those policies would extend coverage.
+- **No LLM-based semantics**: By design. The existing `NLAssertionsEvaluator` pattern could add hallucination detection as a future Layer 2.
+- **Adversarial wrapper is illustrative**: Production deployment would need calibration against real user distributions.
+
+</details>
+
+<details>
+<summary><strong>Related Work</strong> (click to expand)</summary>
+
+Draws on: TRAJECT-Bench (tool usage diagnostics), TRACE (evidence banks), Agent GPA (temporal phase evaluation), SWE-eval (info-gain metrics). Adapted for tau2-bench's Dec-POMDP dual-control environment with a deterministic-first philosophy.
+
+</details>
