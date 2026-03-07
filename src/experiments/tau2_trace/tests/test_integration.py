@@ -283,9 +283,7 @@ class TestEndToEndPipeline:
 
     def test_telecom_pipeline(self):
         results = _build_results("telecom")
-        scorecards = evaluate_results_trace(
-            results.simulations, domain="telecom"
-        )
+        scorecards = evaluate_results_trace(results.simulations, domain="telecom")
 
         assert len(scorecards) == 3
         for sc in scorecards:
@@ -313,9 +311,7 @@ class TestEndToEndPipeline:
 
     def test_retail_pipeline(self):
         results = _build_results("retail")
-        scorecards = evaluate_results_trace(
-            results.simulations, domain="retail"
-        )
+        scorecards = evaluate_results_trace(results.simulations, domain="retail")
 
         assert len(scorecards) == 2
         for sc in scorecards:
@@ -360,9 +356,7 @@ class TestEndToEndPipeline:
     def test_telecom_specific_metrics(self):
         """Verify telecom-specific metrics are computed correctly."""
         results = _build_results("telecom")
-        scorecards = evaluate_results_trace(
-            results.simulations, domain="telecom"
-        )
+        scorecards = evaluate_results_trace(results.simulations, domain="telecom")
 
         sc = scorecards[0]
 
@@ -388,9 +382,7 @@ class TestEndToEndPipeline:
     def test_retail_read_after_write(self):
         """Verify retail read-after-write detection."""
         results = _build_results("retail")
-        scorecards = evaluate_results_trace(
-            results.simulations, domain="retail"
-        )
+        scorecards = evaluate_results_trace(results.simulations, domain="retail")
 
         sc = scorecards[0]
 

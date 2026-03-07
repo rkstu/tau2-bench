@@ -15,13 +15,25 @@ from experiments.tau2_trace.tool_order_evaluator import (
 
 class TestPhaseOrderMatching:
     def test_perfect_order(self):
-        tools = ["check_status_bar", "toggle_airplane_mode", "check_sim_status", "reset_apn_settings", "get_line_details"]
+        tools = [
+            "check_status_bar",
+            "toggle_airplane_mode",
+            "check_sim_status",
+            "reset_apn_settings",
+            "get_line_details",
+        ]
         valid, total = _match_workflow_phase_order(tools, TELECOM_PATH1_PHASE_ORDER)
         assert valid == total
         assert total == 4  # 5 phases matched = 4 transitions
 
     def test_reversed_order(self):
-        tools = ["get_line_details", "reset_apn_settings", "check_sim_status", "toggle_airplane_mode", "check_status_bar"]
+        tools = [
+            "get_line_details",
+            "reset_apn_settings",
+            "check_sim_status",
+            "toggle_airplane_mode",
+            "check_status_bar",
+        ]
         valid, total = _match_workflow_phase_order(tools, TELECOM_PATH1_PHASE_ORDER)
         assert valid == 0
 
@@ -45,12 +57,22 @@ class TestBestWorkflowMatch:
         assert score > 0.0
 
     def test_matches_path2(self):
-        tools = ["run_speed_test", "toggle_roaming", "toggle_data", "toggle_data_saver_mode"]
+        tools = [
+            "run_speed_test",
+            "toggle_roaming",
+            "toggle_data",
+            "toggle_data_saver_mode",
+        ]
         name, score, valid, total = _best_workflow_match(tools)
         assert name == "path2_mobile_data"
 
     def test_matches_path3(self):
-        tools = ["can_send_mms", "check_status_bar", "toggle_wifi_calling", "reset_apn_settings"]
+        tools = [
+            "can_send_mms",
+            "check_status_bar",
+            "toggle_wifi_calling",
+            "reset_apn_settings",
+        ]
         name, score, valid, total = _best_workflow_match(tools)
         assert name == "path3_mms"
 

@@ -91,7 +91,11 @@ class TestAdversarialWrapper:
         if wrapper._pending_correction is not None:
             # Second call should deliver the correction
             msg2, state = wrapper.generate_next_message(agent_msg, state)
-            assert "correct info" in msg2.content.lower() or "wrong" in msg2.content.lower() or "check again" in msg2.content.lower()
+            assert (
+                "correct info" in msg2.content.lower()
+                or "wrong" in msg2.content.lower()
+                or "check again" in msg2.content.lower()
+            )
 
     def test_reset_clears_state(self):
         base = FakeBaseSimulator()

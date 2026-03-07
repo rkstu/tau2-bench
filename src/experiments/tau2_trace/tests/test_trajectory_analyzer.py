@@ -75,9 +75,7 @@ class TestExtractToolCalls:
         messages = [
             AssistantMessage(
                 role="assistant",
-                tool_calls=[
-                    ToolCall(id="tc3", name="bad_call", arguments={"x": 1})
-                ],
+                tool_calls=[ToolCall(id="tc3", name="bad_call", arguments={"x": 1})],
             ),
             ToolMessage(id="tc3", role="tool", content="Error", error=True),
         ]
@@ -111,9 +109,7 @@ class TestRedundantCalls:
 
 class TestLoopDetection:
     def test_no_loops(self):
-        records = [
-            ToolCallRecord(i, f"tool_{i}", {}, "assistant") for i in range(6)
-        ]
+        records = [ToolCallRecord(i, f"tool_{i}", {}, "assistant") for i in range(6)]
         assert _detect_loops(records) == 0
 
     def test_detects_loop(self):
@@ -160,7 +156,11 @@ class TestAnalyzeTrajectory:
             AssistantMessage(
                 role="assistant",
                 tool_calls=[
-                    ToolCall(id="t1", name="get_customer_by_phone", arguments={"phone": "555"})
+                    ToolCall(
+                        id="t1",
+                        name="get_customer_by_phone",
+                        arguments={"phone": "555"},
+                    )
                 ],
             ),
             ToolMessage(id="t1", role="tool", content='{"id": "C1"}'),

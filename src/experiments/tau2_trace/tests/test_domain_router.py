@@ -23,7 +23,9 @@ def _make_sim(task_id="task_1", trial=0, domain_tools=None) -> SimulationRun:
         AssistantMessage(
             role="assistant",
             tool_calls=[
-                ToolCall(id="t1", name="get_customer_by_phone", arguments={"phone": "555"})
+                ToolCall(
+                    id="t1", name="get_customer_by_phone", arguments={"phone": "555"}
+                )
             ],
         ),
         ToolMessage(id="t1", role="tool", content='{"id": "C1", "name": "Alice"}'),

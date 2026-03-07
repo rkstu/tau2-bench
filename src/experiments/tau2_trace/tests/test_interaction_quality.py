@@ -44,7 +44,9 @@ class TestRepeatedInfoRequests:
     def test_no_repeats(self):
         messages = [
             ToolMessage(id="t1", role="tool", content='{"customer_id": "C12345"}'),
-            AssistantMessage(role="assistant", content="I will help you with your order."),
+            AssistantMessage(
+                role="assistant", content="I will help you with your order."
+            ),
         ]
         count = _count_repeated_info_requests(messages, [])
         assert count == 0
@@ -64,7 +66,9 @@ class TestRepeatedInfoRequests:
 class TestGuidancePrecision:
     def test_precise_guidance(self):
         messages = [
-            AssistantMessage(role="assistant", content="Please toggle your airplane mode off."),
+            AssistantMessage(
+                role="assistant", content="Please toggle your airplane mode off."
+            ),
             AssistantMessage(role="assistant", content="Now check your APN settings."),
         ]
         precision = _compute_guidance_precision(messages, TELECOM_GUIDANCE_TERMS)
@@ -72,7 +76,9 @@ class TestGuidancePrecision:
 
     def test_vague_guidance(self):
         messages = [
-            AssistantMessage(role="assistant", content="Please try the thing I mentioned."),
+            AssistantMessage(
+                role="assistant", content="Please try the thing I mentioned."
+            ),
             AssistantMessage(role="assistant", content="Can you check that setting?"),
         ]
         precision = _compute_guidance_precision(messages, TELECOM_GUIDANCE_TERMS)
