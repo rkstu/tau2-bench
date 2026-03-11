@@ -17,19 +17,23 @@ Usage:
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
+
+from pydantic import BaseModel
 
 from tau2.data_model.message import Message, UserMessage
 from tau2.user.base import BaseUser, UserState, ValidUserInputMessage
 
+PerturbationKind = Literal[
+    "interruption", "self_correction_setup", "self_correction_delivery"
+]
 
-@dataclass
-class PerturbationEvent:
+
+class PerturbationEvent(BaseModel):
     """Record of a perturbation that was applied."""
 
     turn: int
-    kind: str  # "interruption" or "self_correction"
+    kind: PerturbationKind
     original_content: Optional[str] = None
     injected_content: Optional[str] = None
 

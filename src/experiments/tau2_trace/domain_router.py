@@ -21,6 +21,9 @@ def evaluate_simulation_trace(
     simulation: SimulationRun,
     domain: str,
     expected_actions: int = 0,
+    recovery_window: int = 3,
+    use_llm_judge: bool = False,
+    llm_judge_model: Optional[str] = None,
 ) -> CompositeScorecard:
     """
     Run the full tau2-TRACE analysis pipeline on a single SimulationRun.
@@ -30,14 +33,19 @@ def evaluate_simulation_trace(
         domain: The domain name (telecom, retail, airline).
         expected_actions: Expected number of actions from task metadata
             (task_num_actions from Results.to_df()). Used for turns_vs_expected.
+        recovery_window: How many subsequent tool calls to inspect when
+            looking for error recovery (default 3).
+        use_llm_judge: Enable LLM-based evaluation for interaction quality
+            metrics (higher fidelity, incurs API cost).
+        llm_judge_model: LLM model identifier for judge calls.
 
     Returns:
         A CompositeScorecard containing all computed metrics.
     """
-    # Phase 1: Core trajectory analysis
-    traj_metrics, records = analyze_trajectory(simulation, domain)
+    traj_metrics, records = analyze_trajectory(
+        simulation, domain, recovery_window=recovery_window
+    )
 
-    # Phase 2: Tool ordering evaluation (domain-aware)
     ordering_metrics = evaluate_tool_ordering(
         records=records,
         domain=domain,
@@ -45,7 +53,6 @@ def evaluate_simulation_trace(
         trial=simulation.trial,
     )
 
-    # Phase 3: Interaction quality (domain-aware)
     interaction_metrics = evaluate_interaction_quality(
         messages=simulation.messages,
         records=records,
@@ -55,6 +62,8 @@ def evaluate_simulation_trace(
         total_turns=traj_metrics.total_turns,
         agent_tool_call_count=traj_metrics.agent_tool_call_count,
         expected_actions=expected_actions,
+        use_llm_judge=use_llm_judge,
+        llm_judge_model=llm_judge_model,
     )
 
     return CompositeScorecard(
@@ -71,6 +80,9 @@ def evaluate_results_trace(
     simulations: list[SimulationRun],
     domain: str,
     task_expected_actions: Optional[dict[str, int]] = None,
+    recovery_window: int = 3,
+    use_llm_judge: bool = False,
+    llm_judge_model: Optional[str] = None,
 ) -> list[CompositeScorecard]:
     """
     Batch-evaluate a list of simulation runs.
@@ -79,6 +91,9 @@ def evaluate_results_trace(
         simulations: List of SimulationRun objects.
         domain: Domain name.
         task_expected_actions: Optional mapping of task_id -> expected action count.
+        recovery_window: Error recovery lookahead window size.
+        use_llm_judge: Enable LLM-based interaction quality evaluation.
+        llm_judge_model: LLM model identifier for judge calls.
 
     Returns:
         List of CompositeScorecard, one per simulation.
@@ -89,7 +104,14 @@ def evaluate_results_trace(
     scorecards = []
     for sim in simulations:
         expected = task_expected_actions.get(sim.task_id, 0)
-        scorecard = evaluate_simulation_trace(sim, domain, expected)
+        scorecard = evaluate_simulation_trace(
+            sim,
+            domain,
+            expected,
+            recovery_window=recovery_window,
+            use_llm_judge=use_llm_judge,
+            llm_judge_model=llm_judge_model,
+        )
         scorecards.append(scorecard)
 
     return scorecards

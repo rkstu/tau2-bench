@@ -1,21 +1,26 @@
 """
 Phase 6: Experiment Runner.
 
-CLI entry point for tau2-TRACE. Supports two modes:
-
-1. Post-hoc analysis: Analyze existing simulation Results JSON files.
-2. Live evaluation: Run simulations with optional adversarial wrapper.
+CLI entry point for tau2-TRACE. Supports post-hoc analysis of existing
+simulation Results JSON files, producing an augmented DataFrame with
+trajectory-aware metrics merged alongside the core pass/fail columns.
 
 Usage:
-    # Analyze existing results
+    # Analyse existing results (deterministic, zero-cost)
     python -m experiments.tau2_trace.run_experiment analyze \
         --results-file data/tau2/simulations/my_run.json \
         --output src/experiments/tau2_trace/results/augmented.csv
 
-    # Analyze with explicit domain override
+    # Analyse with explicit domain override
     python -m experiments.tau2_trace.run_experiment analyze \
         --results-file data/tau2/simulations/my_run.json \
         --domain telecom \
+        --output src/experiments/tau2_trace/results/augmented.csv
+
+    # Analyse with LLM judge for interaction quality
+    python -m experiments.tau2_trace.run_experiment analyze \
+        --results-file data/tau2/simulations/my_run.json \
+        --llm-judge --llm-judge-model gpt-4.1 \
         --output src/experiments/tau2_trace/results/augmented.csv
 """
 
@@ -37,6 +42,9 @@ def analyze_results(
     results_path: Path,
     output_path: Path,
     domain_override: str | None = None,
+    recovery_window: int = 3,
+    use_llm_judge: bool = False,
+    llm_judge_model: str | None = None,
 ) -> pd.DataFrame:
     """
     Post-hoc analysis mode: load an existing Results file, run tau2-TRACE
@@ -46,6 +54,9 @@ def analyze_results(
         results_path: Path to a tau2-bench simulation Results JSON file.
         output_path: Path to write the augmented CSV.
         domain_override: Override the domain from the Results file.
+        recovery_window: Error recovery lookahead window size.
+        use_llm_judge: Enable LLM-based interaction quality evaluation.
+        llm_judge_model: LLM model for judge calls.
 
     Returns:
         The augmented pandas DataFrame.
@@ -74,6 +85,9 @@ def analyze_results(
         simulations=results.simulations,
         domain=domain,
         task_expected_actions=task_expected_actions,
+        recovery_window=recovery_window,
+        use_llm_judge=use_llm_judge,
+        llm_judge_model=llm_judge_model,
     )
 
     # Build the core DataFrame from Results.
@@ -138,7 +152,6 @@ def _print_summary(df: pd.DataFrame, domain: str) -> None:
         print("  No trace metrics computed.")
         return
 
-    # Core outcome metrics
     if "reward" in df.columns:
         avg_reward = df["reward"].mean()
         pass_rate = (df["reward"] >= 1.0 - 1e-6).mean() * 100
@@ -146,7 +159,6 @@ def _print_summary(df: pd.DataFrame, domain: str) -> None:
         print(f"    Average Reward:        {avg_reward:.4f}")
         print(f"    Pass Rate:             {pass_rate:.1f}%")
 
-    # Trajectory efficiency
     print(f"\n  Trajectory Efficiency:")
     for col in [
         "trace_total_turns",
@@ -155,12 +167,14 @@ def _print_summary(df: pd.DataFrame, domain: str) -> None:
         "trace_loop_count",
         "trace_error_count",
         "trace_error_recovery_rate",
+        "trace_error_burst_count",
+        "trace_error_bursts_recovered",
+        "trace_orphan_tool_messages",
     ]:
         if col in df.columns:
             label = col.replace("trace_", "").replace("_", " ").title()
             print(f"    {label:30s} {df[col].mean():>8.2f} (avg)")
 
-    # Ordering metrics
     print(f"\n  Policy Adherence:")
     for col in [
         "trace_policy_adherence",
@@ -171,7 +185,6 @@ def _print_summary(df: pd.DataFrame, domain: str) -> None:
             label = col.replace("trace_", "").replace("_", " ").title()
             print(f"    {label:30s} {df[col].mean():>8.2f} (avg)")
 
-    # Interaction quality
     print(f"\n  Interaction Quality:")
     for col in [
         "trace_action_density",
@@ -219,14 +232,40 @@ def main() -> None:
         default=None,
         help="Override domain (auto-detected from results if not specified)",
     )
+    analyze_parser.add_argument(
+        "--recovery-window",
+        type=int,
+        default=3,
+        help="Error recovery lookahead window size (default: 3)",
+    )
+    analyze_parser.add_argument(
+        "--llm-judge",
+        action="store_true",
+        default=False,
+        help="Enable LLM-based interaction quality evaluation (incurs API cost)",
+    )
+    analyze_parser.add_argument(
+        "--llm-judge-model",
+        type=str,
+        default=None,
+        help="LLM model for judge calls (required with --llm-judge)",
+    )
 
     args = parser.parse_args()
 
     if args.command == "analyze":
+        if args.llm_judge and not args.llm_judge_model:
+            analyze_parser.error(
+                "--llm-judge-model is required when --llm-judge is set"
+            )
+
         analyze_results(
             results_path=args.results_file,
             output_path=args.output,
             domain_override=args.domain,
+            recovery_window=args.recovery_window,
+            use_llm_judge=args.llm_judge,
+            llm_judge_model=args.llm_judge_model,
         )
     else:
         parser.print_help()

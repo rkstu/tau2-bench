@@ -16,7 +16,7 @@ from experiments.tau2_trace.domain_router import (
 )
 
 
-def _make_sim(task_id="task_1", trial=0, domain_tools=None) -> SimulationRun:
+def _make_sim(task_id="task_1", trial=0) -> SimulationRun:
     messages = [
         AssistantMessage(role="assistant", content="How can I help you today?"),
         UserMessage(role="user", content="I need help with my account"),
@@ -63,7 +63,6 @@ class TestEvaluateSimulationTrace:
         assert scorecard.trajectory is not None
         assert scorecard.ordering is not None
         assert scorecard.interaction is not None
-        # Retail should not have a matched workflow
         assert scorecard.ordering.matched_workflow is None
 
     def test_scorecard_to_dict(self):
@@ -75,6 +74,14 @@ class TestEvaluateSimulationTrace:
         assert "trace_total_turns" in d
         assert "trace_policy_adherence" in d
         assert "trace_action_density" in d
+        assert "trace_error_burst_count" in d
+        assert "trace_orphan_tool_messages" in d
+
+    def test_recovery_window_threaded(self):
+        """recovery_window parameter reaches trajectory analyzer."""
+        sim = _make_sim()
+        sc = evaluate_simulation_trace(sim, domain="telecom", recovery_window=5)
+        assert sc.trajectory is not None
 
 
 class TestEvaluateResultsTrace:

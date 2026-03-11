@@ -2,23 +2,29 @@
 Phase 3: Interaction Quality Evaluator.
 
 Computes deterministic, mathematical metrics about agent-user interaction
-quality. No NLP, no regex on free-form text, no LLM calls.
+quality.  All metrics default to a zero-cost deterministic mode.  For
+``repeated_info_requests`` and ``guidance_precision``, an optional LLM-judge
+mode can be enabled for higher-fidelity evaluation at the cost of API calls.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Optional
+
+from loguru import logger
 
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
+    SystemMessage,
     ToolMessage,
     UserMessage,
 )
 
 from experiments.tau2_trace.models import InteractionMetrics, ToolCallRecord
 
-# Known telecom user tool parameter terms that indicate specific guidance.
+# Known telecom user-tool parameter terms that indicate specific guidance.
 # When an agent mentions these terms while instructing the user, it shows
 # precise, actionable guidance rather than vague instructions.
 TELECOM_GUIDANCE_TERMS = {
@@ -59,17 +65,34 @@ def _compute_token_to_action_ratio(
     agent_tool_call_count: int,
 ) -> float:
     """
-    Estimate agent tokens per tool call.
-    Uses character count as a proxy when token usage isn't available.
+    Agent output tokens per tool call.
+
+    Prefers actual token-usage data from ``AssistantMessage.usage`` (populated
+    by LiteLLM when available).  Falls back to character count as a proxy when
+    usage data is absent.
     """
     if agent_tool_call_count == 0:
         return 0.0
 
-    total_chars = 0
-    for msg in messages:
-        if isinstance(msg, AssistantMessage) and msg.content:
-            total_chars += len(msg.content)
+    total_tokens = 0
+    has_usage = False
 
+    for msg in messages:
+        if not isinstance(msg, AssistantMessage):
+            continue
+        if msg.usage and msg.usage.get("completion_tokens"):
+            total_tokens += msg.usage["completion_tokens"]
+            has_usage = True
+
+    if has_usage:
+        return total_tokens / agent_tool_call_count
+
+    # Fallback: character count (less accurate but always available)
+    total_chars = sum(
+        len(msg.content)
+        for msg in messages
+        if isinstance(msg, AssistantMessage) and msg.content
+    )
     return total_chars / agent_tool_call_count
 
 
@@ -79,7 +102,7 @@ def _count_repeated_info_requests(
 ) -> int:
     """
     Count agent messages that ask for information already present in
-    prior tool results. We check if any substantial substring (>= 6 chars)
+    prior tool results.  Checks whether any substantial token (>= 6 chars)
     from a tool result appears in a later agent question-like message.
     """
     tool_result_tokens: set[str] = set()
@@ -87,7 +110,6 @@ def _count_repeated_info_requests(
 
     for msg in messages:
         if isinstance(msg, ToolMessage) and msg.content:
-            # Extract identifiers and values from tool results
             for token in msg.content.split():
                 cleaned = token.strip("\"',{}[]:()")
                 if len(cleaned) >= 6:
@@ -96,7 +118,6 @@ def _count_repeated_info_requests(
         elif isinstance(msg, AssistantMessage) and msg.content:
             if not tool_result_tokens:
                 continue
-            # Check if agent is asking about something already known
             content_lower = msg.content.lower()
             has_question = "?" in msg.content or any(
                 w in content_lower
@@ -111,13 +132,57 @@ def _count_repeated_info_requests(
     return repeated
 
 
+def _count_repeated_info_requests_llm(
+    messages: list[Message],
+    llm_model: str,
+) -> int:
+    """
+    LLM-judge variant: ask the model to identify agent messages that
+    redundantly request information already available from prior tool results.
+
+    Returns the count identified by the judge.
+    """
+    from tau2.utils.llm_utils import generate
+
+    trajectory_text = _format_trajectory_for_judge(messages)
+
+    judge_messages: list[SystemMessage | UserMessage] = [
+        SystemMessage(
+            role="system",
+            content=(
+                "You are an evaluation judge for conversational AI agents. "
+                "You will receive a conversation trajectory and must identify "
+                "how many times the agent asks the user for information that "
+                "was already returned by a prior tool call result.\n"
+                'Respond with ONLY a JSON object: {"count": <integer>}'
+            ),
+        ),
+        UserMessage(
+            role="user",
+            content=f"Conversation trajectory:\n\n{trajectory_text}",
+        ),
+    ]
+
+    try:
+        response = generate(model=llm_model, messages=judge_messages)
+        if response.content:
+            parsed = json.loads(response.content.strip())
+            return int(parsed.get("count", 0))
+    except Exception:
+        logger.warning(
+            "LLM judge for repeated_info_requests failed, "
+            "falling back to deterministic count."
+        )
+    return _count_repeated_info_requests(messages, [])
+
+
 def _compute_guidance_precision(
     messages: list[Message],
     guidance_terms: set[str],
 ) -> float:
     """
-    For telecom: fraction of agent messages that contain specific
-    tool-related parameter terms when instructing the user.
+    Fraction of agent text messages that contain specific tool-related
+    parameter terms when instructing the user.
     Higher = agent gives more specific, actionable instructions.
     """
     agent_msgs = [
@@ -138,6 +203,78 @@ def _compute_guidance_precision(
     return precise_count / len(agent_msgs)
 
 
+def _compute_guidance_precision_llm(
+    messages: list[Message],
+    llm_model: str,
+) -> float:
+    """
+    LLM-judge variant: ask the model to assess what fraction of agent
+    messages provide specific, actionable technical guidance (not vague
+    hand-waving).
+
+    Returns a float in [0.0, 1.0].
+    """
+    from tau2.utils.llm_utils import generate
+
+    trajectory_text = _format_trajectory_for_judge(messages)
+
+    judge_messages: list[SystemMessage | UserMessage] = [
+        SystemMessage(
+            role="system",
+            content=(
+                "You are an evaluation judge for conversational AI agents. "
+                "You will receive a conversation trajectory. For each agent "
+                "message that is NOT a tool call, determine whether it provides "
+                "specific, actionable technical guidance (e.g. mentioning exact "
+                "settings, buttons, or steps) versus vague instructions.\n"
+                "Respond with ONLY a JSON object: "
+                '{"precise_count": <int>, "total_agent_messages": <int>}'
+            ),
+        ),
+        UserMessage(
+            role="user",
+            content=f"Conversation trajectory:\n\n{trajectory_text}",
+        ),
+    ]
+
+    try:
+        response = generate(model=llm_model, messages=judge_messages)
+        if response.content:
+            parsed = json.loads(response.content.strip())
+            precise = int(parsed.get("precise_count", 0))
+            total = int(parsed.get("total_agent_messages", 1))
+            if total > 0:
+                return precise / total
+    except Exception:
+        logger.warning(
+            "LLM judge for guidance_precision failed, "
+            "falling back to deterministic evaluation."
+        )
+    return _compute_guidance_precision(messages, TELECOM_GUIDANCE_TERMS)
+
+
+def _format_trajectory_for_judge(messages: list[Message]) -> str:
+    """Build a compact textual summary of the trajectory for LLM judges."""
+    lines: list[str] = []
+    for msg in messages:
+        if isinstance(msg, AssistantMessage):
+            if msg.is_tool_call() and msg.tool_calls:
+                names = ", ".join(tc.name for tc in msg.tool_calls)
+                lines.append(f"[Agent Tool Call] {names}")
+            elif msg.content:
+                lines.append(f"[Agent] {msg.content}")
+        elif isinstance(msg, UserMessage):
+            if msg.is_tool_call() and msg.tool_calls:
+                names = ", ".join(tc.name for tc in msg.tool_calls)
+                lines.append(f"[User Tool Call] {names}")
+            elif msg.content:
+                lines.append(f"[User] {msg.content}")
+        elif isinstance(msg, ToolMessage):
+            content_preview = (msg.content or "")[:200]
+            lines.append(f"[Tool Result] {content_preview}")
+    return "\n".join(lines)
+
+
 def evaluate_interaction_quality(
     messages: list[Message],
     records: list[ToolCallRecord],
@@ -147,6 +284,8 @@ def evaluate_interaction_quality(
     total_turns: int = 0,
     agent_tool_call_count: int = 0,
     expected_actions: int = 0,
+    use_llm_judge: bool = False,
+    llm_judge_model: Optional[str] = None,
 ) -> InteractionMetrics:
     """
     Compute interaction quality metrics for a single simulation.
@@ -160,12 +299,21 @@ def evaluate_interaction_quality(
         total_turns: Pre-computed turn count from TrajectoryMetrics.
         agent_tool_call_count: Pre-computed agent tool call count.
         expected_actions: Expected number of actions from task metadata.
+        use_llm_judge: When True, use LLM-based evaluation for
+            repeated_info_requests and guidance_precision (higher fidelity,
+            but incurs API cost).
+        llm_judge_model: LLM model identifier for judge calls (required
+            when use_llm_judge is True).
     """
     total_tool_calls = len(records)
 
     action_density = _compute_action_density(total_tool_calls, total_turns)
     token_to_action = _compute_token_to_action_ratio(messages, agent_tool_call_count)
-    repeated = _count_repeated_info_requests(messages, records)
+
+    if use_llm_judge and llm_judge_model:
+        repeated = _count_repeated_info_requests_llm(messages, llm_judge_model)
+    else:
+        repeated = _count_repeated_info_requests(messages, records)
 
     turns_vs_expected = 0.0
     if expected_actions > 0:
@@ -173,7 +321,10 @@ def evaluate_interaction_quality(
 
     guidance = 0.0
     if domain == "telecom":
-        guidance = _compute_guidance_precision(messages, TELECOM_GUIDANCE_TERMS)
+        if use_llm_judge and llm_judge_model:
+            guidance = _compute_guidance_precision_llm(messages, llm_judge_model)
+        else:
+            guidance = _compute_guidance_precision(messages, TELECOM_GUIDANCE_TERMS)
 
     return InteractionMetrics(
         task_id=task_id,

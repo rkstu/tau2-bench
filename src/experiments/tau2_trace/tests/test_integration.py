@@ -2,7 +2,7 @@
 End-to-end integration test for tau2-TRACE.
 
 Constructs a realistic Results object with multiple simulations across
-domains and verifies the full pipeline: analyze → merge → augmented DataFrame.
+domains and verifies the full pipeline: analyse → merge → augmented DataFrame.
 """
 
 import json
@@ -41,7 +41,6 @@ def _build_telecom_simulation(task_id: str, trial: int) -> SimulationRun:
         SystemMessage(role="system", content="You are a telecom support agent."),
         AssistantMessage(role="assistant", content="Hello! How can I help you today?"),
         UserMessage(role="user", content="I have no service on my phone."),
-        # Agent checks customer
         AssistantMessage(
             role="assistant",
             tool_calls=[
@@ -57,12 +56,10 @@ def _build_telecom_simulation(task_id: str, trial: int) -> SimulationRun:
             role="tool",
             content='{"customer_id": "C100", "name": "John Doe", "phone": "555-1234"}',
         ),
-        # Agent asks user to check status bar
         AssistantMessage(
             role="assistant",
             content="I found your account, John. Could you please check your status bar and tell me if you see 'No Service' or 'Airplane Mode' displayed?",
         ),
-        # User checks status bar (user tool)
         UserMessage(
             role="user",
             tool_calls=[
@@ -76,7 +73,6 @@ def _build_telecom_simulation(task_id: str, trial: int) -> SimulationRun:
         ),
         ToolMessage(id="tc2", role="tool", content="No Service", requestor="user"),
         UserMessage(role="user", content="It says No Service."),
-        # Agent asks to toggle airplane mode
         AssistantMessage(
             role="assistant",
             content="Please toggle your airplane mode on and then off again. This will reset your network connection.",
@@ -109,7 +105,6 @@ def _build_telecom_simulation(task_id: str, trial: int) -> SimulationRun:
         ToolMessage(
             id="tc4", role="tool", content="Airplane mode: OFF", requestor="user"
         ),
-        # User checks again
         UserMessage(
             role="user",
             tool_calls=[
@@ -153,7 +148,6 @@ def _build_retail_simulation(task_id: str, trial: int) -> SimulationRun:
         SystemMessage(role="system", content="You are a retail support agent."),
         AssistantMessage(role="assistant", content="Hi! How can I help you?"),
         UserMessage(role="user", content="I want to cancel my order."),
-        # Agent looks up user
         AssistantMessage(
             role="assistant",
             tool_calls=[
@@ -165,7 +159,6 @@ def _build_retail_simulation(task_id: str, trial: int) -> SimulationRun:
             ],
         ),
         ToolMessage(id="tc1", role="tool", content='{"user_id": "U100"}'),
-        # Agent gets order
         AssistantMessage(
             role="assistant",
             tool_calls=[
@@ -181,7 +174,6 @@ def _build_retail_simulation(task_id: str, trial: int) -> SimulationRun:
             role="tool",
             content='{"order_id": "O200", "status": "pending", "items": ["Widget A"]}',
         ),
-        # Agent cancels order
         AssistantMessage(
             role="assistant",
             tool_calls=[
@@ -193,7 +185,6 @@ def _build_retail_simulation(task_id: str, trial: int) -> SimulationRun:
             ],
         ),
         ToolMessage(id="tc3", role="tool", content='{"status": "cancelled"}'),
-        # Agent verifies (read-after-write)
         AssistantMessage(
             role="assistant",
             tool_calls=[
@@ -297,12 +288,13 @@ class TestEndToEndPipeline:
             assert d["trace_action_density"] > 0
             assert d["trace_matched_workflow"] is not None
 
-        # Verify DataFrame merge using our trace data
         df_trace = pd.DataFrame([sc.to_dict() for sc in scorecards])
         assert len(df_trace) == 3
         assert "trace_total_tool_calls" in df_trace.columns
         assert "trace_policy_adherence" in df_trace.columns
         assert "trace_action_density" in df_trace.columns
+        assert "trace_error_burst_count" in df_trace.columns
+        assert "trace_orphan_tool_messages" in df_trace.columns
 
         trace_cols = [c for c in df_trace.columns if c.startswith("trace_")]
         for col in trace_cols:
@@ -317,7 +309,7 @@ class TestEndToEndPipeline:
         for sc in scorecards:
             assert sc.domain == "retail"
             assert sc.ordering.matched_workflow is None
-            assert sc.ordering.read_after_write_score == 1.0  # we cancel + verify
+            assert sc.ordering.read_after_write_score == 1.0
 
         df_trace = pd.DataFrame([sc.to_dict() for sc in scorecards])
         assert len(df_trace) == 2
@@ -328,27 +320,23 @@ class TestEndToEndPipeline:
         results = _build_results("telecom")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Save Results to JSON
             results_path = Path(tmpdir) / "test_results.json"
             results.save(results_path)
 
-            # Run the full CLI pipeline
             output_path = Path(tmpdir) / "augmented.csv"
             df = analyze_results(
                 results_path=results_path,
                 output_path=output_path,
             )
 
-            # Verify output file was created
             assert output_path.exists()
 
-            # Verify DataFrame content
             assert len(df) == 3
             assert "reward" in df.columns
             assert "trace_total_tool_calls" in df.columns
             assert "trace_policy_adherence" in df.columns
+            assert "trace_error_burst_count" in df.columns
 
-            # Read it back from CSV
             df_reload = pd.read_csv(output_path)
             assert len(df_reload) == 3
             assert "trace_action_density" in df_reload.columns
@@ -360,22 +348,17 @@ class TestEndToEndPipeline:
 
         sc = scorecards[0]
 
-        # Trajectory: 1 agent tool call + 4 user tool calls
         assert sc.trajectory.agent_tool_call_count == 1
         assert sc.trajectory.user_tool_call_count == 4
         assert sc.trajectory.total_tool_call_count == 5
-
-        # check_status_bar called twice with same args = 1 redundant detection
-        # (toggle_airplane_mode is also called twice but that's intentional on/off)
         assert sc.trajectory.redundant_tool_calls >= 0
         assert sc.trajectory.loop_count == 0
         assert sc.trajectory.error_count == 0
+        assert sc.trajectory.orphan_tool_messages == 0
 
-        # Ordering: should match path1 (no service → airplane → status bar)
         assert sc.ordering.matched_workflow == "path1_no_service"
         assert sc.ordering.policy_adherence_score > 0.0
 
-        # Interaction: guidance should mention telecom terms
         assert sc.interaction.guidance_precision > 0.0
         assert sc.interaction.action_density > 0.0
 
@@ -385,8 +368,6 @@ class TestEndToEndPipeline:
         scorecards = evaluate_results_trace(results.simulations, domain="retail")
 
         sc = scorecards[0]
-
-        # cancel_pending_order followed by get_order_details = verified write
         assert sc.ordering.write_calls_total == 1
         assert sc.ordering.write_calls_verified == 1
         assert sc.ordering.read_after_write_score == 1.0

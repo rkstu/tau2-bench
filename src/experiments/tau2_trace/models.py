@@ -1,29 +1,63 @@
-"""Data models for tau2-TRACE metrics."""
+"""
+Data models for tau2-TRACE metrics.
+
+All models use Pydantic BaseModel for consistency with the tau2-bench
+core codebase (tau2.data_model.*). Metric containers expose a to_dict()
+method that prefixes keys with ``trace_`` for clean DataFrame merging.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Optional
 
+from pydantic import BaseModel, Field
 
-@dataclass
-class ToolCallRecord:
-    """A single tool call extracted from the trajectory."""
+from tau2.data_model.message import ToolRequestor
+
+
+class ToolCallRecord(BaseModel):
+    """A single tool call extracted from the simulation trajectory."""
 
     turn_index: int
     name: str
-    arguments: dict
-    requestor: str  # "assistant" or "user"
+    arguments: dict = Field(default_factory=dict)
+    requestor: ToolRequestor = "assistant"
     result_content: Optional[str] = None
     result_error: bool = False
 
 
-@dataclass
-class TrajectoryMetrics:
+class RecoveryPair(BaseModel):
+    """
+    Links a failed tool call to the subsequent call that recovered it.
+
+    Enables developers to inspect the diff between the failing invocation
+    and the successful retry (e.g. corrected arguments, different tool name).
+    """
+
+    failed: ToolCallRecord
+    recovered: ToolCallRecord
+
+
+class ErrorBurst(BaseModel):
+    """
+    A consecutive sequence of failures on the same tool before a recovery
+    or abandonment. Collapses N raw errors into one logical error event
+    so that metrics are not inflated by rapid retries.
+
+    Example: tool_a fails 3 times then succeeds → one burst of length 3,
+    recovered=True.
+    """
+
+    tool_name: str
+    count: int = 1
+    recovered: bool = False
+
+
+class TrajectoryMetrics(BaseModel):
     """Deterministic efficiency metrics computed from a simulation trajectory."""
 
     task_id: str
-    trial: Optional[int]
+    trial: Optional[int] = None
     domain: str
 
     total_turns: int = 0
@@ -40,6 +74,11 @@ class TrajectoryMetrics:
     error_count: int = 0
     errors_recovered: int = 0
     error_recovery_rate: float = 0.0
+
+    error_burst_count: int = 0
+    error_bursts_recovered: int = 0
+    recovery_pairs: list[RecoveryPair] = Field(default_factory=list)
+    orphan_tool_messages: int = 0
 
     agent_cost: Optional[float] = None
 
@@ -60,21 +99,23 @@ class TrajectoryMetrics:
             "trace_error_count": self.error_count,
             "trace_errors_recovered": self.errors_recovered,
             "trace_error_recovery_rate": self.error_recovery_rate,
+            "trace_error_burst_count": self.error_burst_count,
+            "trace_error_bursts_recovered": self.error_bursts_recovered,
+            "trace_orphan_tool_messages": self.orphan_tool_messages,
             "trace_agent_cost": self.agent_cost,
         }
 
 
-@dataclass
-class OrderingMetrics:
+class OrderingMetrics(BaseModel):
     """Policy adherence metrics from DAG-based tool ordering evaluation."""
 
     task_id: str
-    trial: Optional[int]
+    trial: Optional[int] = None
 
     policy_adherence_score: float = 0.0
     total_transitions: int = 0
     valid_transitions: int = 0
-    policy_breaches: list[tuple[str, str]] = field(default_factory=list)
+    policy_breaches: list[tuple[str, str]] = Field(default_factory=list)
     matched_workflow: Optional[str] = None
     read_after_write_score: float = 0.0
     write_calls_total: int = 0
@@ -95,19 +136,18 @@ class OrderingMetrics:
         }
 
 
-@dataclass
-class InteractionMetrics:
+class InteractionMetrics(BaseModel):
     """Deterministic interaction quality metrics."""
 
     task_id: str
-    trial: Optional[int]
+    trial: Optional[int] = None
 
     action_density: float = 0.0
     token_to_action_ratio: float = 0.0
     turns_to_resolution: int = 0
     turns_vs_expected_ratio: float = 0.0
     repeated_info_requests: int = 0
-    guidance_precision: float = 0.0  # telecom only
+    guidance_precision: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -122,12 +162,11 @@ class InteractionMetrics:
         }
 
 
-@dataclass
-class CompositeScorecard:
+class CompositeScorecard(BaseModel):
     """Aggregated scorecard for a single simulation run."""
 
     task_id: str
-    trial: Optional[int]
+    trial: Optional[int] = None
     domain: str
 
     trajectory: Optional[TrajectoryMetrics] = None

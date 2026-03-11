@@ -80,8 +80,18 @@ class TestBestWorkflowMatch:
 class TestReadAfterWrite:
     def test_verified_write(self):
         records = [
-            ToolCallRecord(0, "cancel_pending_order", {"id": "O1"}, "assistant"),
-            ToolCallRecord(1, "get_order_details", {"id": "O1"}, "assistant"),
+            ToolCallRecord(
+                turn_index=0,
+                name="cancel_pending_order",
+                arguments={"id": "O1"},
+                requestor="assistant",
+            ),
+            ToolCallRecord(
+                turn_index=1,
+                name="get_order_details",
+                arguments={"id": "O1"},
+                requestor="assistant",
+            ),
         ]
         total, verified, score = _check_read_after_write(records, RETAIL_WRITE_TO_READ)
         assert total == 1
@@ -90,8 +100,18 @@ class TestReadAfterWrite:
 
     def test_unverified_write(self):
         records = [
-            ToolCallRecord(0, "cancel_pending_order", {"id": "O1"}, "assistant"),
-            ToolCallRecord(1, "find_user_id_by_email", {"email": "x"}, "assistant"),
+            ToolCallRecord(
+                turn_index=0,
+                name="cancel_pending_order",
+                arguments={"id": "O1"},
+                requestor="assistant",
+            ),
+            ToolCallRecord(
+                turn_index=1,
+                name="find_user_id_by_email",
+                arguments={"email": "x"},
+                requestor="assistant",
+            ),
         ]
         total, verified, score = _check_read_after_write(records, RETAIL_WRITE_TO_READ)
         assert total == 1
@@ -100,7 +120,12 @@ class TestReadAfterWrite:
 
     def test_no_writes(self):
         records = [
-            ToolCallRecord(0, "get_order_details", {"id": "O1"}, "assistant"),
+            ToolCallRecord(
+                turn_index=0,
+                name="get_order_details",
+                arguments={"id": "O1"},
+                requestor="assistant",
+            ),
         ]
         total, verified, score = _check_read_after_write(records, RETAIL_WRITE_TO_READ)
         assert total == 0
@@ -110,9 +135,9 @@ class TestReadAfterWrite:
 class TestEvaluateToolOrdering:
     def test_telecom_domain(self):
         records = [
-            ToolCallRecord(0, "check_status_bar", {}, "user"),
-            ToolCallRecord(1, "toggle_airplane_mode", {}, "user"),
-            ToolCallRecord(2, "check_sim_status", {}, "user"),
+            ToolCallRecord(turn_index=0, name="check_status_bar", requestor="user"),
+            ToolCallRecord(turn_index=1, name="toggle_airplane_mode", requestor="user"),
+            ToolCallRecord(turn_index=2, name="check_sim_status", requestor="user"),
         ]
         metrics = evaluate_tool_ordering(records, "telecom", "task_1", trial=0)
         assert metrics.matched_workflow == "path1_no_service"
@@ -120,8 +145,18 @@ class TestEvaluateToolOrdering:
 
     def test_retail_domain(self):
         records = [
-            ToolCallRecord(0, "cancel_pending_order", {"id": "O1"}, "assistant"),
-            ToolCallRecord(1, "get_order_details", {"id": "O1"}, "assistant"),
+            ToolCallRecord(
+                turn_index=0,
+                name="cancel_pending_order",
+                arguments={"id": "O1"},
+                requestor="assistant",
+            ),
+            ToolCallRecord(
+                turn_index=1,
+                name="get_order_details",
+                arguments={"id": "O1"},
+                requestor="assistant",
+            ),
         ]
         metrics = evaluate_tool_ordering(records, "retail", "task_1", trial=0)
         assert metrics.read_after_write_score == 1.0
