@@ -1,9 +1,9 @@
 """
 Phase 6: Experiment Runner.
 
-CLI entry point for tau2-TRACE. Supports post-hoc analysis of existing
-simulation Results JSON files, producing an augmented DataFrame with
-trajectory-aware metrics merged alongside the core pass/fail columns.
+CLI entry point for tau2-TRACE. Supports:
+  1. Post-hoc analysis of existing simulation Results JSON files.
+  2. Live simulation with optional adversarial user-simulator wrapper.
 
 Usage:
     # Analyse existing results (deterministic, zero-cost)
@@ -11,17 +11,15 @@ Usage:
         --results-file data/tau2/simulations/my_run.json \
         --output src/experiments/tau2_trace/results/augmented.csv
 
-    # Analyse with explicit domain override
-    python -m experiments.tau2_trace.run_experiment analyze \
-        --results-file data/tau2/simulations/my_run.json \
-        --domain telecom \
-        --output src/experiments/tau2_trace/results/augmented.csv
-
     # Analyse with LLM judge for interaction quality
     python -m experiments.tau2_trace.run_experiment analyze \
         --results-file data/tau2/simulations/my_run.json \
-        --llm-judge --llm-judge-model gpt-4.1 \
-        --output src/experiments/tau2_trace/results/augmented.csv
+        --llm-judge --llm-judge-model gpt-4.1
+
+    # Run a live simulation with adversarial user perturbations
+    python -m experiments.tau2_trace.run_experiment run \
+        --domain telecom --agent-llm gpt-4.1 --user-llm gpt-4.1 \
+        --adversarial --perturbation-rate 0.2 --num-tasks 3
 """
 
 from __future__ import annotations
@@ -29,6 +27,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -136,6 +135,184 @@ def analyze_results(
     logger.info(f"Augmented results saved to {output_path}")
 
     # Print summary
+    _print_summary(df_augmented, domain)
+
+    return df_augmented
+
+
+def run_live(
+    domain: str,
+    agent_llm: str,
+    user_llm: str,
+    output_path: Path,
+    num_tasks: int = 1,
+    num_trials: int = 1,
+    max_steps: int = 100,
+    adversarial: bool = False,
+    perturbation_rate: float = 0.20,
+    adversarial_seed: int = 42,
+    recovery_window: int = 3,
+    use_llm_judge: bool = False,
+    llm_judge_model: Optional[str] = None,
+    seed: Optional[int] = 300,
+) -> pd.DataFrame:
+    """
+    Live simulation mode: run tau2-bench simulations with optional
+    adversarial user-simulator wrapper, then apply tau2-TRACE analysis.
+
+    When --adversarial is set, the UserSimulator is wrapped via the Proxy
+    Pattern so the Orchestrator sees the same interface but the user
+    occasionally injects interruptions or self-corrections.
+    """
+    from tau2.agent.llm_agent import LLMAgent
+    from tau2.data_model.simulation import SimulationRun
+    from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
+    from tau2.orchestrator.orchestrator import Orchestrator
+    from tau2.registry import registry
+    from tau2.run import get_info, get_tasks
+    from tau2.user.user_simulator import UserSimulator
+
+    from experiments.tau2_trace.adversarial_wrapper import AdversarialSimulatorWrapper
+
+    tasks = get_tasks(task_set_name=domain, num_tasks=num_tasks)
+    logger.info(f"Loaded {len(tasks)} tasks for domain '{domain}'")
+
+    simulations: list[SimulationRun] = []
+    task_expected_actions: dict[str, int] = {}
+
+    for task in tasks:
+        if task.evaluation_criteria is not None:
+            info = task.evaluation_criteria.info()
+            num_actions = info.get("num_agent_actions", 0) + info.get(
+                "num_user_actions", 0
+            )
+            task_expected_actions[task.id] = num_actions
+
+        for trial in range(num_trials):
+            trial_seed = (seed or 300) + trial
+            logger.info(
+                f"Running task={task.id} trial={trial} adversarial={adversarial}"
+            )
+
+            env_constructor = registry.get_env_constructor(domain)
+            environment = env_constructor()
+
+            agent_obj = LLMAgent(
+                tools=environment.get_tools(),
+                domain_policy=environment.get_policy(),
+                llm=agent_llm,
+            )
+
+            try:
+                user_tools = environment.get_user_tools()
+            except Exception:
+                user_tools = None
+
+            user_obj = UserSimulator(
+                tools=user_tools,
+                instructions=str(task.user_scenario),
+                llm=user_llm,
+            )
+
+            if adversarial:
+                user_obj = AdversarialSimulatorWrapper(
+                    base_simulator=user_obj,
+                    perturbation_rate=perturbation_rate,
+                    seed=adversarial_seed + trial,
+                )
+
+            orchestrator = Orchestrator(
+                domain=domain,
+                agent=agent_obj,
+                user=user_obj,
+                environment=environment,
+                task=task,
+                max_steps=max_steps,
+                seed=trial_seed,
+            )
+            simulation = orchestrator.run()
+
+            reward_info = evaluate_simulation(
+                simulation=simulation,
+                task=task,
+                evaluation_type=EvaluationType.ALL,
+                solo_mode=False,
+                domain=domain,
+            )
+            simulation.reward_info = reward_info
+
+            if adversarial and isinstance(user_obj, AdversarialSimulatorWrapper):
+                n_perturbed = len(user_obj.perturbation_log)
+                logger.info(f"  Adversarial perturbations injected: {n_perturbed}")
+
+            simulations.append(simulation)
+
+    # Build Results object
+    info = get_info(
+        domain=domain,
+        agent="llm_agent",
+        user="user_simulator",
+        llm_agent=agent_llm,
+        llm_user=user_llm,
+        num_trials=num_trials,
+        max_steps=max_steps,
+        seed=seed,
+    )
+    results = Results(
+        info=info,
+        tasks=tasks,
+        simulations=simulations,
+    )
+
+    # Save raw results
+    raw_path = output_path.with_suffix(".json")
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    results.save(raw_path)
+    logger.info(f"Raw results saved to {raw_path}")
+
+    # Run tau2-TRACE analysis
+    logger.info("Running tau2-TRACE analysis...")
+    scorecards = evaluate_results_trace(
+        simulations=simulations,
+        domain=domain,
+        task_expected_actions=task_expected_actions,
+        recovery_window=recovery_window,
+        use_llm_judge=use_llm_judge,
+        llm_judge_model=llm_judge_model,
+    )
+
+    try:
+        df_core = results.to_df()
+    except (KeyError, AttributeError):
+        rows = []
+        for sim in simulations:
+            rows.append(
+                {
+                    "simulation_id": sim.id,
+                    "task_id": sim.task_id,
+                    "trial": sim.trial,
+                    "seed": sim.seed,
+                    "reward": sim.reward_info.reward if sim.reward_info else None,
+                    "agent_cost": sim.agent_cost,
+                    "num_messages": len(sim.messages),
+                    "info_domain": domain,
+                }
+            )
+        df_core = pd.DataFrame(rows)
+
+    trace_rows = [sc.to_dict() for sc in scorecards]
+    df_trace = pd.DataFrame(trace_rows)
+
+    merge_cols = ["task_id"]
+    if "trial" in df_core.columns and "trial" in df_trace.columns:
+        merge_cols.append("trial")
+
+    df_augmented = pd.merge(df_core, df_trace, on=merge_cols, how="left")
+
+    csv_path = output_path.with_suffix(".csv")
+    df_augmented.to_csv(csv_path, index=False)
+    logger.info(f"Augmented results saved to {csv_path}")
+
     _print_summary(df_augmented, domain)
 
     return df_augmented
@@ -251,6 +428,96 @@ def main() -> None:
         help="LLM model for judge calls (required with --llm-judge)",
     )
 
+    # ---- run subcommand ----
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run live simulations with optional adversarial wrapper + trace analysis",
+    )
+    run_parser.add_argument(
+        "--domain",
+        type=str,
+        required=True,
+        help="Domain to run (telecom, retail, airline)",
+    )
+    run_parser.add_argument(
+        "--agent-llm",
+        type=str,
+        required=True,
+        help="LLM model for the agent (e.g. gpt-4.1)",
+    )
+    run_parser.add_argument(
+        "--user-llm",
+        type=str,
+        required=True,
+        help="LLM model for the user simulator (e.g. gpt-4.1)",
+    )
+    run_parser.add_argument(
+        "--num-tasks",
+        type=int,
+        default=1,
+        help="Number of tasks to run (default: 1)",
+    )
+    run_parser.add_argument(
+        "--num-trials",
+        type=int,
+        default=1,
+        help="Number of trials per task (default: 1)",
+    )
+    run_parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=100,
+        help="Maximum orchestrator steps per simulation (default: 100)",
+    )
+    run_parser.add_argument(
+        "--adversarial",
+        action="store_true",
+        default=False,
+        help="Wrap user simulator with adversarial perturbation proxy",
+    )
+    run_parser.add_argument(
+        "--perturbation-rate",
+        type=float,
+        default=0.20,
+        help="Probability of perturbation per user turn (default: 0.20)",
+    )
+    run_parser.add_argument(
+        "--adversarial-seed",
+        type=int,
+        default=42,
+        help="Base seed for adversarial RNG (default: 42)",
+    )
+    run_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("src/experiments/tau2_trace/results/live_run"),
+        help="Output path prefix (writes .json and .csv)",
+    )
+    run_parser.add_argument(
+        "--recovery-window",
+        type=int,
+        default=3,
+        help="Error recovery lookahead window size (default: 3)",
+    )
+    run_parser.add_argument(
+        "--llm-judge",
+        action="store_true",
+        default=False,
+        help="Enable LLM-based interaction quality evaluation",
+    )
+    run_parser.add_argument(
+        "--llm-judge-model",
+        type=str,
+        default=None,
+        help="LLM model for judge calls (required with --llm-judge)",
+    )
+    run_parser.add_argument(
+        "--seed",
+        type=int,
+        default=300,
+        help="Base seed for simulations (default: 300)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "analyze":
@@ -266,6 +533,26 @@ def main() -> None:
             recovery_window=args.recovery_window,
             use_llm_judge=args.llm_judge,
             llm_judge_model=args.llm_judge_model,
+        )
+    elif args.command == "run":
+        if args.llm_judge and not args.llm_judge_model:
+            run_parser.error("--llm-judge-model is required when --llm-judge is set")
+
+        run_live(
+            domain=args.domain,
+            agent_llm=args.agent_llm,
+            user_llm=args.user_llm,
+            output_path=args.output,
+            num_tasks=args.num_tasks,
+            num_trials=args.num_trials,
+            max_steps=args.max_steps,
+            adversarial=args.adversarial,
+            perturbation_rate=args.perturbation_rate,
+            adversarial_seed=args.adversarial_seed,
+            recovery_window=args.recovery_window,
+            use_llm_judge=args.llm_judge,
+            llm_judge_model=args.llm_judge_model,
+            seed=args.seed,
         )
     else:
         parser.print_help()

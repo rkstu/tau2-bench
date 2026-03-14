@@ -153,8 +153,14 @@ def _count_repeated_info_requests_llm(
                 "You are an evaluation judge for conversational AI agents. "
                 "You will receive a conversation trajectory and must identify "
                 "how many times the agent asks the user for information that "
-                "was already returned by a prior tool call result.\n"
-                'Respond with ONLY a JSON object: {"count": <integer>}'
+                "was already returned by a prior tool call result.\n\n"
+                "Think step-by-step:\n"
+                "1. List each tool result and the key information it returned.\n"
+                "2. For each subsequent agent message, check if it asks for "
+                "information already available from a prior tool result.\n"
+                "3. Count the total number of redundant requests.\n\n"
+                "Respond with a JSON object:\n"
+                '{"reasoning": "<your step-by-step analysis>", "count": <integer>}'
             ),
         ),
         UserMessage(
@@ -226,9 +232,16 @@ def _compute_guidance_precision_llm(
                 "You will receive a conversation trajectory. For each agent "
                 "message that is NOT a tool call, determine whether it provides "
                 "specific, actionable technical guidance (e.g. mentioning exact "
-                "settings, buttons, or steps) versus vague instructions.\n"
-                "Respond with ONLY a JSON object: "
-                '{"precise_count": <int>, "total_agent_messages": <int>}'
+                "settings, buttons, or steps) versus vague instructions.\n\n"
+                "Think step-by-step:\n"
+                "1. Identify each agent text message (skip tool calls).\n"
+                "2. For each message, note whether it references specific "
+                "settings, device features, or concrete steps the user should "
+                "take.\n"
+                "3. Count precise messages vs total agent text messages.\n\n"
+                "Respond with a JSON object:\n"
+                '{"reasoning": "<your step-by-step analysis>", '
+                '"precise_count": <int>, "total_agent_messages": <int>}'
             ),
         ),
         UserMessage(
