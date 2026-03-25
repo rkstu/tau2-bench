@@ -150,8 +150,9 @@ print(df.groupby('info_domain')[['trace_action_density','trace_turns_vs_expected
 - **Dict comparison via `get_dict_hash`** from `tau2.utils.utils` -- handles key ordering and nested structures reliably; previous hash cached to avoid recomputation
 - **Orphan tool message tracking** -- unmatched ToolMessages are logged via `loguru.warning` and surfaced as `trace_orphan_tool_messages` rather than silently absorbed
 - **Token-to-action ratio** -- prefers actual `AssistantMessage.usage["completion_tokens"]` when available, falls back to character count as proxy
-- **LLM judge with Chain-of-Thought** -- lazy-imports `tau2.utils.llm_utils.generate()`, prompts require explicit step-by-step reasoning in a `"reasoning"` field before the score; gracefully falls back to deterministic evaluation on any failure (safe for CI/CD)
-- **Adversarial testing** -- `AdversarialSimulatorWrapper` injects seeded interruptions and self-corrections via the Proxy Pattern. Integrated into the `run` subcommand with `--adversarial`, `--perturbation-rate`, `--adversarial-seed` flags. E2E verified: 6 perturbations injected, caused agent failure (1.0 -> 0.0). Zero core code touched.
+- **LLM judge with Chain-of-Thought** -- lazy-imports `tau2.utils.llm_utils.generate()`, prompts require explicit step-by-step reasoning in a `"reasoning"` field before the score; parses responses via `extract_json_from_llm_response()` (handles markdown code blocks); gracefully falls back to deterministic evaluation on any failure (safe for CI/CD)
+- **Adversarial testing** -- `AdversarialSimulatorWrapper` inherits `HalfDuplexUser` and injects seeded interruptions and self-corrections via the Proxy Pattern. Forwards `set_seed()` to the base simulator for Orchestrator compatibility. Integrated into the `run` subcommand with `--adversarial`, `--perturbation-rate`, `--adversarial-seed` flags. E2E verified: 6 perturbations injected, caused agent failure (1.0 -> 0.0). Zero core code touched.
+- **Phase constant validation** -- 6 CI-ready tests parse actual `@is_tool(...)` decorated functions from telecom/retail/airline source files and validate phase constants against them. Caught 3 real drift bugs (`get_line_details` never existed; `get_customer_by_name` and `get_data_usage` were missing). DOT workflow file existence and step coverage also verified.
 
 ## Known Limitations
 
@@ -161,7 +162,7 @@ These are intentional trade-offs for speed and simplicity, not bugs:
 - **Loop detection uses a fixed sliding window (size 3).** Misses interleaved loops or near-loops with slight variations. Chosen for O(n) speed and zero false positives over recall.
 - **Guidance precision uses a curated set of 18 telecom-specific terms** (e.g., "airplane mode", "APN", "roaming"). An agent mentioning the right keyword in the wrong context would score as precise. This is a fast heuristic, not semantic understanding.
 - **Repeated-info detection is token-in-string matching** with a 6-character minimum token length. Works well for structured identifiers (customer IDs, order numbers) but can over-count on common substrings. Our E2E testing confirmed this: deterministic mode reported 6 repeated-info requests where the CoT LLM judge found 0 on the same simulation.
-- **Phase-order evaluation uses manually transcribed constants**, not runtime DOT file parsing. The phase matching checks non-decreasing first-occurrence indices -- it validates high-level sequencing, not strict causal dependencies. We chose this over adding `networkx`/`pydot` dependencies.
+- **Phase-order evaluation uses manually transcribed constants**, not runtime DOT file parsing. The phase matching checks non-decreasing first-occurrence indices -- it validates high-level sequencing, not strict causal dependencies. We chose this over adding `networkx`/`pydot` dependencies. Validation tests parse actual tool source files to catch drift (and already caught 3 real bugs).
 - **LLM judge uses Chain-of-Thought but is not calibrated.** The opt-in prompts require step-by-step reasoning before scoring, which improves reliability over raw JSON output, but there is no multi-rater calibration or rubric anchoring. Recommended for nightly or release-candidate evaluations, not every CI run.
 - **Retail/airline metrics are thinner than telecom.** No DAG workflow files exist for these domains -- they only get read-after-write verification and no guidance precision.
 - **Case studies are single-task runs.** They demonstrate the kind of diagnostic insight tau2-TRACE provides, not statistical claims about agent quality.
@@ -170,8 +171,9 @@ These are intentional trade-offs for speed and simplicity, not bugs:
 
 All verification was performed end-to-end and is reproducible. See [EXAMPLE_OUTPUT.md](EXAMPLE_OUTPUT.md) for the full testing strategy and output.
 
-- **68/68 unit tests passing** (1.36s) across 6 test files -- unit tests, integration tests with file I/O, end-to-end DataFrame merge, and mock-verified LLM judge tests
-- **154/155 core tau2-bench tests passing** -- the 1 failure is a pre-existing LLM-dependent flaky test (`test_run_tasks_action_checks`), unrelated to tau2-TRACE
+- **75/75 unit tests passing** (1.35s) across 6 test files -- unit tests, integration tests with file I/O, end-to-end DataFrame merge, mock-verified LLM judge tests, phase constant validation against source, and Orchestrator compatibility
+- **Core tau2-bench tests passing** -- the 1 failure is a pre-existing LLM-dependent flaky test (`test_run_tasks_action_checks`), unrelated to tau2-TRACE
+- **Synced with latest upstream** -- merged latest sierra-research/tau2-bench changes; migrated from removed `BaseUser` to `HalfDuplexUser`, added `set_seed` forwarding for Orchestrator compatibility
 - **6 live E2E simulations** against real `gpt-4.1-mini` API: mock baseline, telecom baseline, telecom adversarial, retail baseline, airline baseline, telecom with LLM judge
 - **`ruff check`** -- all lint checks passed
 - **`ruff format`** -- all formatting verified
@@ -190,7 +192,7 @@ src/experiments/tau2_trace/
 ├── adversarial_wrapper.py     # UserSimulator proxy (interruptions, self-corrections)
 ├── run_experiment.py          # CLI: analyze (post-hoc) + run (live with --adversarial)
 ├── results/                   # Example-only snapshots (gitignored; see EXAMPLE_OUTPUT.md to reproduce)
-├── tests/                     # 68 tests (6 files)
+├── tests/                     # 75 tests (6 files)
 ├── README.md
 └── EXAMPLE_OUTPUT.md          # Full testing strategy, E2E outputs, claim-by-claim verification
 ```

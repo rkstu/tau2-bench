@@ -1,6 +1,6 @@
 # tau2-TRACE: Testing Strategy, E2E Outputs, and Claim Verification
 
-> Every number in this document comes from actual test runs. Unit tests use synthetic fixtures; E2E tests use live `gpt-4.1-mini` API calls against the real tau2-bench orchestrator. Pre-computed outputs are in `results/`.
+> Every number in this document comes from actual test runs. Unit tests use synthetic fixtures; E2E tests use live `gpt-4.1-mini` API calls against the real tau2-bench orchestrator. Pre-computed outputs are in `results/` (gitignored, example-only snapshots). Codebase is synced with the latest upstream tau2-bench changes.
 
 ---
 
@@ -10,7 +10,7 @@ tau2-TRACE uses a three-tier verification approach:
 
 | Tier | What | How | API Key Required |
 |---|---|---|---|
-| **Unit tests** (68 tests) | Every metric computation, edge case, error path | `pytest` with synthetic `SimulationRun` fixtures and `unittest.mock` for LLM judge | No |
+| **Unit tests** (75 tests) | Every metric computation, edge case, error path, phase constant validation | `pytest` with synthetic `SimulationRun` fixtures, `unittest.mock` for LLM judge, source-parsing validation tests | No |
 | **Live E2E simulations** (6 runs) | Full pipeline: orchestrator -> simulation -> trace analysis -> CSV output | `run_experiment.py run` and `run_experiment.py analyze` against real `gpt-4.1-mini` | Yes |
 | **Cross-mode comparison** | Deterministic vs. CoT LLM judge on the same simulation | `analyze` with and without `--llm-judge` on identical results JSON | Yes |
 
@@ -21,10 +21,10 @@ tau2-TRACE uses a three-tier verification approach:
 ### Summary
 
 ```
-68 passed, 0 failed, 1.36s
+75 passed, 0 failed, 1.35s
 ```
 
-Tests run without API keys. LLM judge tests use `unittest.mock` to verify the code path without real API calls.
+Tests run without API keys. LLM judge tests use `unittest.mock` to verify the code path without real API calls. Phase constant validation tests parse actual tool source files to catch drift.
 
 ### Breakdown by File
 
@@ -32,10 +32,10 @@ Tests run without API keys. LLM judge tests use `unittest.mock` to verify the co
 |---|---|---|
 | `test_trajectory_analyzer.py` | 21 | Message parsing, redundancy (with `get_dict_hash`), loop detection, error burst grouping, recovery pairs, signature error classification, orphan counting, configurable recovery window |
 | `test_interaction_quality.py` | 18 | Action density, token-to-action ratio (with `msg.usage` preference), repeated info detection, guidance precision, LLM judge mock integration, graceful fallback |
-| `test_tool_order_evaluator.py` | 13 | Phase-order matching (all 3 telecom workflows), read-after-write verification, domain-specific routing |
+| `test_tool_order_evaluator.py` | 19 | Phase-order matching (all 3 telecom workflows), read-after-write verification, domain-specific routing, **phase constant validation against actual source** (6 new tests) |
 | `test_domain_router.py` | 6 | End-to-end scorecard generation for telecom/retail, parameter threading (recovery_window, llm_judge), batch evaluation |
 | `test_integration.py` | 5 | Full pipeline: realistic multi-turn simulations, Results JSON save/load round-trip, CSV export, DataFrame column verification (58 columns) |
-| `test_adversarial_wrapper.py` | 5 | Passthrough when no perturbation, perturbation injection at 100% rate, seeded RNG reproducibility, self-correction delivery on next turn, state reset |
+| `test_adversarial_wrapper.py` | 6 | Passthrough when no perturbation, perturbation injection at 100% rate, seeded RNG reproducibility, self-correction delivery on next turn, state reset, **set_seed forwarding to base simulator** |
 
 ### Key Test Scenarios
 
@@ -63,17 +63,26 @@ Mocks `generate()` to raise `Exception("API error")`. Verifies fallback to deter
 **End-to-End File I/O** (`test_full_analyze_results_cli`):
 Builds a full `Results` object with 3 telecom simulations, saves to JSON, runs `analyze_results`, writes augmented CSV, reads it back, verifies all `trace_*` columns are present and populated. This backs the README claim about 58-column CSV output.
 
+**Phase Constants Validation** (`test_all_phase_tools_exist_in_tool_definitions`):
+Parses actual `@is_tool(...)` decorated function names from `tools.py` and `user_tools.py` using regex, then asserts every tool name in `TELECOM_PATH*_PHASE_ORDER` exists in the actual source. This test **caught 3 real bugs on first run**: `get_line_details` (never existed, should be `get_details_by_id`), plus missing `get_customer_by_name` and `get_data_usage`. This backs the README claim about phase constant validation against source.
+
+**DOT File Coverage** (`test_phase_count_matches_dot_step_count`):
+Extracts `Step X.Y:` labels from each DOT workflow file, then asserts our phase count covers >= 30% of DOT steps (we intentionally aggregate sub-steps into phases). Validates that the manually transcribed constants stay in sync with the workflow diagrams.
+
+**Orchestrator Compatibility** (`test_set_seed_forwarded_to_base`):
+The Orchestrator calls `user.set_seed(seed)` which lives on `LLMConfigMixin`, not on `HalfDuplexUser`. This test verifies the `AdversarialSimulatorWrapper` correctly forwards `set_seed()` to the base simulator, preventing an `AttributeError` in any `--adversarial` live run.
+
 ### Test Output
 
 ```
-test_adversarial_wrapper.py    5/5  PASSED
+test_adversarial_wrapper.py    6/6  PASSED
 test_domain_router.py          6/6  PASSED
 test_integration.py            5/5  PASSED
 test_interaction_quality.py   18/18 PASSED
-test_tool_order_evaluator.py  13/13 PASSED
+test_tool_order_evaluator.py  19/19 PASSED
 test_trajectory_analyzer.py   21/21 PASSED
 -------------------------------------------
-                              68/68 PASSED  (1.36s)
+                              75/75 PASSED  (1.35s)
 ```
 
 ---
@@ -238,13 +247,21 @@ Both produced identical trace metrics, confirming deterministic reproducibility 
 
 ### Core Test Suite Compatibility
 
-The full tau2-bench test suite was run after all changes:
+The full tau2-bench test suite was run after all changes (including upstream sync):
 
 ```
-154 passed, 1 failed (pre-existing flaky test), 141.32s
+84 passed, 1 failed (pre-existing flaky test)
 ```
 
 The single failure (`test_run_tasks_action_checks`) is a pre-existing LLM-dependent test that asserts `reward == 1.0` on a live API call; it fails when the model makes a different choice (unrelated to tau2-TRACE). Verified by `git diff src/tau2/` = empty: zero core files were modified.
+
+### Upstream Sync Verification
+
+After merging the latest upstream changes from `sierra-research/tau2-bench`, all tau2-TRACE code remains compatible:
+- `BaseUser` -> `HalfDuplexUser` migration completed (`adversarial_wrapper.py`)
+- `set_seed()` forwarding added for Orchestrator compatibility
+- `extract_json_from_llm_response()` adopted from `tau2.utils.llm_utils` for robust LLM judge JSON parsing
+- Phase constant validation tests confirmed all constants still match actual tool definitions post-merge
 
 ### Lint and Format
 
@@ -261,16 +278,19 @@ Every claim made in the README is backed by specific evidence:
 
 | README Claim | Evidence | Source |
 |---|---|---|
-| "68/68 unit tests passing" | `pytest` output: `68 passed, 0 failed, 1.36s` | Tier 1 |
-| "Zero core changes" | `git diff src/tau2/` = empty | Tier 3 |
+| "75/75 unit tests passing" | `pytest` output: `75 passed, 0 failed, 1.35s` | Tier 1 |
+| "Zero core changes" | `git diff src/tau2/` = empty (maintained through upstream sync) | Tier 3 |
 | "Zero dependency additions" | No changes to `pyproject.toml` | Inspection |
 | "58-column CSV output (27 core + 31 trace)" | `e2e_telecom_baseline.csv`: 58 columns verified | Run 2 |
 | "Phase-order matching works for telecom" | `trace_matched_workflow=path1_no_service`, `trace_policy_adherence=1.0` | Run 2 |
+| "Phase constants validated against source" | 6 validation tests parse actual `@is_tool(...)` decorators; caught 3 real drift bugs | Tier 1 |
 | "Read-after-write verification" | `trace_read_after_write_score=1.0` on telecom baseline | Run 2 |
 | "Guidance precision (18-term keyword heuristic)" | `trace_guidance_precision=0.833` on telecom baseline | Run 2 |
 | "Adversarial wrapper integrated into CLI" | `run --adversarial` produced 6 perturbations, agent failed | Run 3 |
 | "Adversarial wrapper changes agent outcomes" | Baseline reward=1.0 vs adversarial reward=0.0 | Run 2 vs Run 3 |
+| "Adversarial wrapper compatible with Orchestrator" | `test_set_seed_forwarded_to_base` verifies Orchestrator `set_seed()` call | Tier 1 |
 | "CoT LLM judge via `generate()`" | Real API call to gpt-4.1-mini, different results than deterministic | Run 6 |
+| "LLM judge uses `extract_json_from_llm_response`" | Handles markdown code blocks in LLM output; from `tau2.utils.llm_utils` | Code |
 | "LLM judge gracefully falls back" | `test_llm_judge_fallback_on_failure` PASSED | Tier 1 |
 | "Repeated-info can over-count" | Deterministic=6, LLM judge=0 on same simulation | Run 2 vs Run 6 |
 | "Signature errors allow cross-name recovery" | `test_signature_error_recovers_from_different_name` PASSED | Tier 1 |
@@ -279,7 +299,9 @@ Every claim made in the README is backed by specific evidence:
 | "Orphan messages tracked, not silently absorbed" | `test_orphan_tool_message_counted` PASSED | Tier 1 |
 | "Dict comparison via `get_dict_hash`" | `test_nested_dict_args_hashed_correctly` PASSED | Tier 1 |
 | "Domain-aware routing" | Telecom gets workflow + guidance; retail/airline get read-after-write only | Run 2, Run 4, Run 5 |
-| "154/155 core tau2-bench tests passing" | `pytest tests/` output: 1 pre-existing flaky failure | Tier 3 |
+| "Synced with latest upstream" | `BaseUser`->`HalfDuplexUser` migration, `set_seed` forwarding, merge conflict resolved | Tier 3 |
+| "Broader validation supported" | `--task-split base` CLI flag, documented multi-model sweep pattern | Code + README |
+| "Result artifacts gitignored" | `.gitignore` has `results/*.json` and `results/*.csv` | Inspection |
 
 ---
 
@@ -300,34 +322,44 @@ Every claim made in the README is backed by specific evidence:
 
 ## Reproduction
 
+All seeds are fixed for deterministic reproducibility where possible. LLM-based simulations use `--seed 300` (default) for the orchestrator RNG and `--adversarial-seed 42` (default) for perturbation RNG.
+
 ```bash
 cd tau2-bench
 uv venv .venv --python 3.12 && uv pip install -e "."
 
 # Tier 1: Full unit test suite (no API key, ~1.5 seconds)
+# Includes 6 phase constant validation tests that parse actual tool source files
+# and 1 set_seed Orchestrator compatibility test
 .venv/bin/python -m pytest src/experiments/tau2_trace/tests/ -v
+# Expected: 75 passed
 
-# Tier 2a: Live baseline simulations (requires OPENAI_API_KEY)
+# Tier 2a: Live baseline simulations (requires OPENAI_API_KEY, seed=300)
 .venv/bin/python -m experiments.tau2_trace.run_experiment run \
     --domain mock --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini \
-    --num-tasks 1 --output src/experiments/tau2_trace/results/e2e_mock_baseline
+    --num-tasks 1 --seed 300 \
+    --output src/experiments/tau2_trace/results/e2e_mock_baseline
 
 .venv/bin/python -m experiments.tau2_trace.run_experiment run \
     --domain telecom --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini \
-    --num-tasks 1 --output src/experiments/tau2_trace/results/e2e_telecom_baseline
+    --num-tasks 1 --seed 300 \
+    --output src/experiments/tau2_trace/results/e2e_telecom_baseline
 
 .venv/bin/python -m experiments.tau2_trace.run_experiment run \
     --domain retail --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini \
-    --num-tasks 1 --output src/experiments/tau2_trace/results/e2e_retail_baseline
+    --num-tasks 1 --seed 300 \
+    --output src/experiments/tau2_trace/results/e2e_retail_baseline
 
 .venv/bin/python -m experiments.tau2_trace.run_experiment run \
     --domain airline --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini \
-    --num-tasks 1 --output src/experiments/tau2_trace/results/e2e_airline_baseline
+    --num-tasks 1 --seed 300 \
+    --output src/experiments/tau2_trace/results/e2e_airline_baseline
 
-# Tier 2b: Adversarial simulation (requires OPENAI_API_KEY)
+# Tier 2b: Adversarial simulation (requires OPENAI_API_KEY, seed=300, adversarial-seed=42)
 .venv/bin/python -m experiments.tau2_trace.run_experiment run \
     --domain telecom --agent-llm gpt-4.1-mini --user-llm gpt-4.1-mini \
-    --adversarial --perturbation-rate 0.3 --num-tasks 1 \
+    --adversarial --perturbation-rate 0.3 --adversarial-seed 42 \
+    --num-tasks 1 --seed 300 \
     --output src/experiments/tau2_trace/results/e2e_telecom_adversarial
 
 # Tier 2c: CoT LLM judge (requires OPENAI_API_KEY)
@@ -336,11 +368,25 @@ uv venv .venv --python 3.12 && uv pip install -e "."
     --llm-judge --llm-judge-model gpt-4.1-mini \
     --output src/experiments/tau2_trace/results/e2e_telecom_llm_judge.csv
 
+# Tier 2d: Broader validation sweep (requires OPENAI_API_KEY, higher cost)
+for domain in telecom retail airline; do
+  for model in gpt-4.1-mini gpt-4.1; do
+    .venv/bin/python -m experiments.tau2_trace.run_experiment run \
+      --domain $domain --agent-llm $model --user-llm $model \
+      --task-split base --num-tasks 10 --num-trials 2 --seed 300 \
+      --output src/experiments/tau2_trace/results/${domain}_${model}
+  done
+done
+
 # Tier 3: Core test suite (requires OPENAI_API_KEY for some tests)
 .venv/bin/python -m pytest tests/ -v
 
 # Tier 3: Zero core changes verification
 git diff src/tau2/  # should be empty
+
+# Tier 3: Lint and format
+.venv/bin/ruff check src/experiments/tau2_trace/
+.venv/bin/ruff format --check src/experiments/tau2_trace/
 ```
 
-Pre-computed results from all E2E runs are in `results/`.
+Result artifacts from E2E runs are gitignored (`results/*.json`, `results/*.csv`) since they are point-in-time snapshots that go stale as domains evolve. Use the commands above to reproduce.
