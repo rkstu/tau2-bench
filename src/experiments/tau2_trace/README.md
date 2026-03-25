@@ -119,6 +119,30 @@ python -m experiments.tau2_trace.run_experiment run \
 
 Output: CSV with all standard tau2-bench columns (27) plus `trace_*` columns (31), totalling 58 columns, ready for pandas analysis.
 
+### Broader Validation
+
+For statistically meaningful results, run a sweep across multiple tasks, models, and domains. Use `--task-split base` to evaluate on the full standard task set:
+
+```bash
+# Broader sweep: 10 tasks x 2 trials across domains
+for domain in telecom retail airline; do
+  for model in gpt-4.1-mini gpt-4.1; do
+    python -m experiments.tau2_trace.run_experiment run \
+      --domain $domain --agent-llm $model --user-llm $model \
+      --task-split base --num-tasks 10 --num-trials 2 \
+      --output results/${domain}_${model}
+  done
+done
+
+# Then compare across models via pandas
+python -c "
+import pandas as pd, glob
+dfs = [pd.read_csv(f) for f in glob.glob('results/*.csv')]
+df = pd.concat(dfs)
+print(df.groupby('info_domain')[['trace_action_density','trace_turns_vs_expected','trace_policy_adherence']].describe())
+"
+```
+
 ## Technical Implementation
 
 - **Pydantic models** throughout -- consistent with `tau2.data_model.*` conventions; uses `ToolRequestor` Literal from `tau2.data_model.message`
@@ -152,7 +176,7 @@ All verification was performed end-to-end and is reproducible. See [EXAMPLE_OUTP
 - **`ruff check`** -- all lint checks passed
 - **`ruff format`** -- all formatting verified
 - **`git diff src/tau2/`** -- empty (zero core files modified)
-- Pre-computed result CSVs and JSON from all E2E runs included in `results/`
+- Result artifacts in `results/` are **example-only snapshots** from E2E runs at a specific point in time (gitignored). See [EXAMPLE_OUTPUT.md](EXAMPLE_OUTPUT.md) for reproduction steps
 
 ## File Structure
 
@@ -165,7 +189,7 @@ src/experiments/tau2_trace/
 ├── domain_router.py           # Domain-aware dispatch -> CompositeScorecard
 ├── adversarial_wrapper.py     # UserSimulator proxy (interruptions, self-corrections)
 ├── run_experiment.py          # CLI: analyze (post-hoc) + run (live with --adversarial)
-├── results/                   # Pre-computed CSVs and JSON from all E2E runs
+├── results/                   # Example-only snapshots (gitignored; see EXAMPLE_OUTPUT.md to reproduce)
 ├── tests/                     # 68 tests (6 files)
 ├── README.md
 └── EXAMPLE_OUTPUT.md          # Full testing strategy, E2E outputs, claim-by-claim verification

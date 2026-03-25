@@ -32,9 +32,8 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from tau2.data_model.simulation import Results
-
 from experiments.tau2_trace.domain_router import evaluate_results_trace
+from tau2.data_model.simulation import Results
 
 
 def analyze_results(
@@ -147,6 +146,7 @@ def run_live(
     output_path: Path,
     num_tasks: int = 1,
     num_trials: int = 1,
+    task_split: Optional[str] = None,
     max_steps: int = 100,
     adversarial: bool = False,
     perturbation_rate: float = 0.20,
@@ -164,6 +164,7 @@ def run_live(
     Pattern so the Orchestrator sees the same interface but the user
     occasionally injects interruptions or self-corrections.
     """
+    from experiments.tau2_trace.adversarial_wrapper import AdversarialSimulatorWrapper
     from tau2.agent.llm_agent import LLMAgent
     from tau2.data_model.simulation import SimulationRun
     from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
@@ -172,9 +173,11 @@ def run_live(
     from tau2.run import get_info, get_tasks
     from tau2.user.user_simulator import UserSimulator
 
-    from experiments.tau2_trace.adversarial_wrapper import AdversarialSimulatorWrapper
-
-    tasks = get_tasks(task_set_name=domain, num_tasks=num_tasks)
+    tasks = get_tasks(
+        task_set_name=domain,
+        task_split_name=task_split,
+        num_tasks=num_tasks,
+    )
     logger.info(f"Loaded {len(tasks)} tasks for domain '{domain}'")
 
     simulations: list[SimulationRun] = []
@@ -458,6 +461,12 @@ def main() -> None:
         help="Number of tasks to run (default: 1)",
     )
     run_parser.add_argument(
+        "--task-split",
+        type=str,
+        default=None,
+        help="Task split to use (e.g. 'base' for full benchmark set)",
+    )
+    run_parser.add_argument(
         "--num-trials",
         type=int,
         default=1,
@@ -545,6 +554,7 @@ def main() -> None:
             output_path=args.output,
             num_tasks=args.num_tasks,
             num_trials=args.num_trials,
+            task_split=args.task_split,
             max_steps=args.max_steps,
             adversarial=args.adversarial,
             perturbation_rate=args.perturbation_rate,

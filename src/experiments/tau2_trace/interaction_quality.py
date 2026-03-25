@@ -9,11 +9,11 @@ mode can be enabled for higher-fidelity evaluation at the cost of API calls.
 
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from loguru import logger
 
+from experiments.tau2_trace.models import InteractionMetrics, ToolCallRecord
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -21,8 +21,6 @@ from tau2.data_model.message import (
     ToolMessage,
     UserMessage,
 )
-
-from experiments.tau2_trace.models import InteractionMetrics, ToolCallRecord
 
 # Known telecom user-tool parameter terms that indicate specific guidance.
 # When an agent mentions these terms while instructing the user, it shows
@@ -170,9 +168,14 @@ def _count_repeated_info_requests_llm(
     ]
 
     try:
+        from tau2.utils.llm_utils import extract_json_from_llm_response
+
         response = generate(model=llm_model, messages=judge_messages)
         if response.content:
-            parsed = json.loads(response.content.strip())
+            import json
+
+            extracted = extract_json_from_llm_response(response.content)
+            parsed = json.loads(extracted)
             return int(parsed.get("count", 0))
     except Exception:
         logger.warning(
@@ -251,9 +254,14 @@ def _compute_guidance_precision_llm(
     ]
 
     try:
+        from tau2.utils.llm_utils import extract_json_from_llm_response
+
         response = generate(model=llm_model, messages=judge_messages)
         if response.content:
-            parsed = json.loads(response.content.strip())
+            import json
+
+            extracted = extract_json_from_llm_response(response.content)
+            parsed = json.loads(extracted)
             precise = int(parsed.get("precise_count", 0))
             total = int(parsed.get("total_agent_messages", 1))
             if total > 0:

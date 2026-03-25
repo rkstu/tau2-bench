@@ -1,7 +1,14 @@
 """Tests for the trajectory analyzer."""
 
-import pytest
-
+from experiments.tau2_trace.models import ToolCallRecord
+from experiments.tau2_trace.trajectory_analyzer import (
+    _compute_error_recovery,
+    _count_redundant_calls,
+    _detect_loops,
+    _is_signature_error,
+    analyze_trajectory,
+    extract_tool_calls,
+)
 from tau2.data_model.message import (
     AssistantMessage,
     ToolCall,
@@ -9,16 +16,6 @@ from tau2.data_model.message import (
     UserMessage,
 )
 from tau2.data_model.simulation import SimulationRun, TerminationReason
-
-from experiments.tau2_trace.trajectory_analyzer import (
-    _count_redundant_calls,
-    _detect_loops,
-    _compute_error_recovery,
-    _is_signature_error,
-    analyze_trajectory,
-    extract_tool_calls,
-)
-from experiments.tau2_trace.models import ToolCallRecord
 
 
 def _make_sim(messages, task_id="test_1", trial=0, agent_cost=0.5) -> SimulationRun:

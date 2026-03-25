@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from tau2.data_model.simulation import SimulationRun
-
 from experiments.tau2_trace.interaction_quality import evaluate_interaction_quality
 from experiments.tau2_trace.models import CompositeScorecard
 from experiments.tau2_trace.tool_order_evaluator import evaluate_tool_ordering
 from experiments.tau2_trace.trajectory_analyzer import analyze_trajectory
+from tau2.data_model.simulation import SimulationRun
 
 
 def evaluate_simulation_trace(

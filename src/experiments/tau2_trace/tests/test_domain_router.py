@@ -1,7 +1,9 @@
 """Tests for the domain-aware metric router."""
 
-import pytest
-
+from experiments.tau2_trace.domain_router import (
+    evaluate_results_trace,
+    evaluate_simulation_trace,
+)
 from tau2.data_model.message import (
     AssistantMessage,
     ToolCall,
@@ -9,11 +11,6 @@ from tau2.data_model.message import (
     UserMessage,
 )
 from tau2.data_model.simulation import SimulationRun, TerminationReason
-
-from experiments.tau2_trace.domain_router import (
-    evaluate_simulation_trace,
-    evaluate_results_trace,
-)
 
 
 def _make_sim(task_id="task_1", trial=0) -> SimulationRun:

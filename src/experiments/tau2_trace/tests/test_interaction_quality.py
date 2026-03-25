@@ -2,11 +2,8 @@
 
 from unittest.mock import patch
 
-import pytest
-
-from tau2.data_model.message import AssistantMessage, ToolMessage, UserMessage
-
 from experiments.tau2_trace.interaction_quality import (
+    TELECOM_GUIDANCE_TERMS,
     _compute_action_density,
     _compute_guidance_precision,
     _compute_guidance_precision_llm,
@@ -14,9 +11,9 @@ from experiments.tau2_trace.interaction_quality import (
     _count_repeated_info_requests,
     _count_repeated_info_requests_llm,
     evaluate_interaction_quality,
-    TELECOM_GUIDANCE_TERMS,
 )
 from experiments.tau2_trace.models import ToolCallRecord
+from tau2.data_model.message import AssistantMessage, ToolMessage, UserMessage
 
 
 class TestActionDensity:

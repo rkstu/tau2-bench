@@ -1,16 +1,10 @@
 """Tests for the adversarial simulator wrapper."""
 
-import pytest
-from unittest.mock import MagicMock
-from typing import Tuple
-
-from tau2.data_model.message import UserMessage, AssistantMessage
-from tau2.user.base import UserState
-
 from experiments.tau2_trace.adversarial_wrapper import (
     AdversarialSimulatorWrapper,
-    INTERRUPTION_TEMPLATES,
 )
+from tau2.data_model.message import AssistantMessage, UserMessage
+from tau2.user.user_simulator_base import UserState
 
 
 class FakeBaseSimulator:
@@ -18,9 +12,12 @@ class FakeBaseSimulator:
 
     def __init__(self):
         self.instructions = "Test instructions"
-        self.llm = "gpt-4.1"
-        self.llm_args = {}
+        self.tools = None
         self.call_count = 0
+        self._seed = None
+
+    def set_seed(self, seed: int):
+        self._seed = seed
 
     def get_init_state(self, message_history=None):
         return UserState(system_messages=[], messages=[])
@@ -96,6 +93,14 @@ class TestAdversarialWrapper:
                 or "wrong" in msg2.content.lower()
                 or "check again" in msg2.content.lower()
             )
+
+    def test_set_seed_forwarded_to_base(self):
+        """Orchestrator calls set_seed(); wrapper must forward to base."""
+        base = FakeBaseSimulator()
+        wrapper = AdversarialSimulatorWrapper(base, perturbation_rate=0.0, seed=42)
+
+        wrapper.set_seed(123)
+        assert base._seed == 123
 
     def test_reset_clears_state(self):
         base = FakeBaseSimulator()

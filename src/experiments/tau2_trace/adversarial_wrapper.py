@@ -22,7 +22,11 @@ from typing import Literal, Optional, Tuple
 from pydantic import BaseModel
 
 from tau2.data_model.message import Message, UserMessage
-from tau2.user.base import BaseUser, UserState, ValidUserInputMessage
+from tau2.user.user_simulator_base import (
+    HalfDuplexUser,
+    UserState,
+    ValidUserInputMessage,
+)
 
 PerturbationKind = Literal[
     "interruption", "self_correction_setup", "self_correction_delivery"
@@ -53,7 +57,7 @@ SELF_CORRECTION_TEMPLATES = [
 ]
 
 
-class AdversarialSimulatorWrapper(BaseUser):
+class AdversarialSimulatorWrapper(HalfDuplexUser):
     """
     Wraps a UserSimulator and injects perturbations at configurable rates.
 
@@ -72,14 +76,13 @@ class AdversarialSimulatorWrapper(BaseUser):
 
     def __init__(
         self,
-        base_simulator: BaseUser,
+        base_simulator: HalfDuplexUser,
         perturbation_rate: float = 0.20,
         seed: int = 42,
     ):
         super().__init__(
             instructions=base_simulator.instructions,
-            llm=base_simulator.llm,
-            llm_args=base_simulator.llm_args,
+            tools=base_simulator.tools,
         )
         self.base_simulator = base_simulator
         self.perturbation_rate = perturbation_rate
@@ -186,6 +189,11 @@ class AdversarialSimulatorWrapper(BaseUser):
 
         # Happy path: no perturbation
         return base_msg, state
+
+    def set_seed(self, seed: int) -> None:
+        """Forward seed to the base simulator (required by Orchestrator)."""
+        if hasattr(self.base_simulator, "set_seed"):
+            self.base_simulator.set_seed(seed)
 
     def reset(self) -> None:
         """Reset perturbation state for a new simulation."""

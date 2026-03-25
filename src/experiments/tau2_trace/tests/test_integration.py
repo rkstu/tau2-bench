@@ -5,13 +5,13 @@ Constructs a realistic Results object with multiple simulations across
 domains and verifies the full pipeline: analyse → merge → augmented DataFrame.
 """
 
-import json
 import tempfile
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
+from experiments.tau2_trace.domain_router import evaluate_results_trace
+from experiments.tau2_trace.run_experiment import analyze_results
 from tau2.data_model.message import (
     AssistantMessage,
     SystemMessage,
@@ -22,17 +22,14 @@ from tau2.data_model.message import (
 from tau2.data_model.simulation import (
     AgentInfo,
     Info,
-    RewardInfo,
     Results,
+    RewardInfo,
     SimulationRun,
     TerminationReason,
     UserInfo,
 )
-from tau2.data_model.tasks import EvaluationCriteria, Task, UserScenario
+from tau2.data_model.tasks import Task, UserScenario
 from tau2.environment.environment import EnvironmentInfo
-
-from experiments.tau2_trace.domain_router import evaluate_results_trace
-from experiments.tau2_trace.run_experiment import analyze_results
 
 
 def _build_telecom_simulation(task_id: str, trial: int) -> SimulationRun:

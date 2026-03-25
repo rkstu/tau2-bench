@@ -8,10 +8,14 @@ and error-recovery analysis (with burst grouping and recovery-pair tracking).
 
 from __future__ import annotations
 
-from typing import Optional
-
 from loguru import logger
 
+from experiments.tau2_trace.models import (
+    ErrorBurst,
+    RecoveryPair,
+    ToolCallRecord,
+    TrajectoryMetrics,
+)
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -21,13 +25,6 @@ from tau2.data_model.message import (
 )
 from tau2.data_model.simulation import SimulationRun
 from tau2.utils.utils import get_dict_hash
-
-from experiments.tau2_trace.models import (
-    ErrorBurst,
-    RecoveryPair,
-    ToolCallRecord,
-    TrajectoryMetrics,
-)
 
 # Patterns in ToolMessage error content that indicate the agent called a
 # tool name that does not exist (as opposed to passing bad argument values).

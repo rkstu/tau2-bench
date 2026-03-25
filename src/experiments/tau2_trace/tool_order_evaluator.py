@@ -8,8 +8,6 @@ For retail/airline: checks read-after-write verification patterns.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Optional
 
 from experiments.tau2_trace.models import OrderingMetrics, ToolCallRecord
@@ -36,9 +34,10 @@ TELECOM_AGENT_TOOLS_WRITE = {
 TELECOM_AGENT_TOOLS_READ = {
     "get_customer_by_phone",
     "get_customer_by_id",
+    "get_customer_by_name",
     "get_details_by_id",
     "get_bills_for_customer",
-    "get_line_details",
+    "get_data_usage",
 }
 
 # User tools (requestor="user")
@@ -88,7 +87,11 @@ TELECOM_PATH1_PHASE_ORDER = [
     {"toggle_airplane_mode", "check_network_status"},  # Step 1.1: airplane mode
     {"check_sim_status", "reseat_sim_card"},  # Step 1.2: SIM verification
     {"reset_apn_settings", "reboot_device"},  # Step 1.3: APN reset
-    {"get_line_details", "resume_line", "send_payment_request"},  # Step 1.4: suspension
+    {
+        "get_details_by_id",
+        "resume_line",
+        "send_payment_request",
+    },  # Step 1.4: suspension
 ]
 
 TELECOM_PATH2_PHASE_ORDER = [
